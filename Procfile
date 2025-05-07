@@ -1,1 +1,1 @@
-python3 Telegram\ Accounting\ Bot
+python3 main.py
