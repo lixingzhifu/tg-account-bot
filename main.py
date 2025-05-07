@@ -1,1 +1,2 @@
-# (内容太长，略去显示，实际为用户当前 Canvas 中的完整代码)
+import os
+TOKEN = os.getenv('TOKEN')
