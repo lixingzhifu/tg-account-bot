@@ -103,12 +103,21 @@ def set_config(message):
         conn.commit()
         bot.reply_to(message, f"设置成功\n固定汇率：{rate}\n固定费率：{fee}%\n中介佣金：{commission}%")
 
-@bot.message_handler(func=lambda m: re.match(r'^.+\s*[+加]\s*\d+', m.text))
+@bot.message_handler(func=lambda m: re.match(r'^([+加]\s*\d+)|(.+\s*[+加]\s*\d+)', m.text))
 def add_transaction(message):
     chat_id = message.chat.id
-    name, amt = re.findall(r'(.+)[+加]\s*(\d+\.?\d*)', message.text)[0]
-    name = name.strip()
-    amount = float(amt)
+    text = message.text.strip()
+    match = re.match(r'^([+加])\s*(\d+\.?\d*)$', text)
+    if match:
+        # 情况1：只有金额，自动用用户名字
+        name = message.from_user.first_name or '匿名'
+        amount = float(match.group(2))
+    else:
+        # 情况2：名字 + 金额
+        name, amt = re.findall(r'(.+)[+加]\s*(\d+\.?\d*)', text)[0]
+        name = name.strip()
+        amount = float(amt)
+
     currency, rate, fee, commission = get_settings(chat_id)
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute('''INSERT INTO transactions(chat_id, name, amount, rate, fee_rate, commission_rate, currency, date)
