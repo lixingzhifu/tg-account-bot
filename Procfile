@@ -1,1 +1,1 @@
-python3 main.py
+cmd: python3 main.py
