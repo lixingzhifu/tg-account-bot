@@ -1,4 +1,3 @@
-from keep_alive import keep_alive
 import telebot
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -195,6 +194,6 @@ def reset_user_data(message):
     bot.reply_to(message, "✅ 数据已归零，你可以重新开始设置。")
 
 if __name__ == '__main__':
-    keep_alive()
     print("🤖 Bot 已启动...")
     bot.polling(none_stop=True)
+
