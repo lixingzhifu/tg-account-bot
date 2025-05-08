@@ -34,21 +34,12 @@ CREATE TABLE IF NOT EXISTS settings (
 """)
 conn.commit()
 
-# === Inline 菜单按钮 ===
-def get_inline_menu():
-    markup = types.InlineKeyboardMarkup()
-    markup.row(
-        types.InlineKeyboardButton("▶️ Start", callback_data="start"),
-        types.InlineKeyboardButton("💱 设置交易", callback_data="setting")
-    )
-    markup.row(
-        types.InlineKeyboardButton("📖 指令大全", callback_data="help"),
-        types.InlineKeyboardButton("🔄 计算重启", callback_data="reset")
-    )
-    markup.row(
-        types.InlineKeyboardButton("❓ 需要帮助", url="https://t.me/yourgroup"),
-        types.InlineKeyboardButton("🛠 定制机器人", url="https://t.me/yourgroup")
-    )
+# === 固定菜单按钮 ===
+def get_reply_menu():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("▶️ Start", "💱 设置交易")
+    markup.row("📖 指令大全", "🔄 计算重启")
+    markup.row("❓ 需要帮助", "🛠 定制机器人")
     return markup
 
 # === 获取用户设定 ===
@@ -84,31 +75,31 @@ def get_summary(user_id):
 中介佣金应下发：{commission:.2f} USDT
 """
 
-# === 按钮处理 ===
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, "欢迎使用TG记账机器人！", reply_markup=get_inline_menu())
+    bot.send_message(message.chat.id, "欢迎使用TG记账机器人！", reply_markup=get_reply_menu())
 
-@bot.message_handler(func=lambda msg: msg.text == "📋 菜单")
-def show_menu(message):
-    bot.send_message(message.chat.id, "请选择操作：", reply_markup=get_inline_menu())
+@bot.message_handler(func=lambda msg: msg.text == "💱 设置交易")
+def setting(message):
+    bot.send_message(message.chat.id, "格式如下：\n设置货币：RMB\n设置汇率：9\n设置费率：2\n中介佣金：0.5")
 
-@bot.callback_query_handler(func=lambda call: True)
-def handle_menu_click(call):
-    if call.data == "start":
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "欢迎使用TG记账机器人！", reply_markup=get_inline_menu())
-    elif call.data == "setting":
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "格式如下：\n设置货币：RMB\n设置汇率：9\n设置费率：2\n中介佣金：0.5")
-    elif call.data == "help":
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "🧾 指令大全：\n设置货币：RMB\n设置汇率：9\n设置费率：2\n中介佣金：0.5\n+1000（入账）")
-    elif call.data == "reset":
-        cursor.execute("DELETE FROM records WHERE user_id=%s", (call.from_user.id,))
-        conn.commit()
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "✅ 今日记录已清空。")
+@bot.message_handler(func=lambda msg: msg.text == "📖 指令大全")
+def help_cmds(message):
+    bot.send_message(message.chat.id, "🧾 指令大全：\n设置货币：RMB\n设置汇率：9\n设置费率：2\n中介佣金：0.5\n+1000（入账）")
+
+@bot.message_handler(func=lambda msg: msg.text == "🔄 计算重启")
+def reset(message):
+    cursor.execute("DELETE FROM records WHERE user_id=%s", (message.from_user.id,))
+    conn.commit()
+    bot.reply_to(message, "✅ 今日记录已清空。")
+
+@bot.message_handler(func=lambda msg: msg.text == "❓ 需要帮助")
+def help_link(message):
+    bot.send_message(message.chat.id, "加入群组获取帮助：https://t.me/yourgroup")
+
+@bot.message_handler(func=lambda msg: msg.text == "🛠 定制机器人")
+def custom_link(message):
+    bot.send_message(message.chat.id, "联系管理员定制：https://t.me/yourgroup")
 
 @bot.message_handler(func=lambda msg: msg.text.startswith("设置货币："))
 def set_currency(message):
