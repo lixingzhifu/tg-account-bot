@@ -6,6 +6,8 @@ from datetime import datetime
 import math
 import re
 import os
+from flask import Flask, request
+from telebot.types import Update
 
 TOKEN = os.getenv('TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -109,11 +111,9 @@ def add_transaction(message):
     text = message.text.strip()
     match = re.match(r'^([+加])\s*(\d+\.?\d*)$', text)
     if match:
-        # 情况1：只有金额，自动用用户名字
         name = message.from_user.first_name or '匿名'
         amount = float(match.group(2))
     else:
-        # 情况2：名字 + 金额
         name, amt = re.findall(r'(.+)[+加]\s*(\d+\.?\d*)', text)[0]
         name = name.strip()
         amount = float(amt)
@@ -126,7 +126,20 @@ def add_transaction(message):
     conn.commit()
     bot.reply_to(message, f"✅ 已入款 +{amount} ({currency})\n日期\n" + show_summary(chat_id))
 
-if __name__ == '__main__':
-    keep_alive()
-    print("🤖 Bot 已启动...")
-    bot.polling(none_stop=True)
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return "Bot is running."
+
+@app.route(f'/{TOKEN}', methods=['POST'])
+def webhook():
+    update = Update.de_json(request.stream.read().decode("utf-8"))
+    bot.process_new_updates([update])
+    return "ok"
+
+keep_alive()
+
+WEBHOOK_URL = f"https://grateful-fulfillment-production.up.railway.app/{TOKEN}"
+bot.remove_webhook()
+bot.set_webhook(url=WEBHOOK_URL)
