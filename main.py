@@ -12,7 +12,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 bot = telebot.TeleBot(TOKEN)
 
 # === 数据库连接 ===
-conn = psycopg2.connect(Dsn=DATABASE_URL, cursor_factory=RealDictCursor)
+conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 cursor = conn.cursor()
 
 # === 建表 ===
@@ -167,5 +167,6 @@ def add_amount(message):
     except:
         bot.reply_to(message, "格式错误，请输入 +金额，如 +1000")
 
+bot.remove_webhook()
 print("🤖 Bot polling started...")
 bot.polling()
