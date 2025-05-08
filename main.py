@@ -78,6 +78,10 @@ def show_summary(chat_id):
         reply += f"\n中介佣金应下发：{commission_total_rmb}({currency}) | {commission_total_usdt} (USDT)"
     return reply
 
+@bot.message_handler(commands=['start'])
+def handle_start(message):
+    bot.reply_to(message, "欢迎使用 LX 记账机器人 ✅\n请输入 +1000 或者 设置汇率 等命令来开始使用。")
+
 @bot.message_handler(func=lambda m: m.text.lower().startswith('设置'))
 def set_config(message):
     chat_id = message.chat.id
