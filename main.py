@@ -12,7 +12,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 bot = telebot.TeleBot(TOKEN)
 
 # === 数据库连接 ===
-conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+conn = psycopg2.connect(Dsn=DATABASE_URL, cursor_factory=RealDictCursor)
 cursor = conn.cursor()
 
 # === 建表 ===
@@ -34,17 +34,21 @@ CREATE TABLE IF NOT EXISTS settings (
 """)
 conn.commit()
 
-# === 菜单按钮 ===
-def get_main_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("📋 菜单")
-    return markup
-
-def get_menu_options():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("▶️ Start", "💱 设置交易")
-    markup.row("📖 指令大全", "🔄 计算重启")
-    markup.row("❓ 需要帮助", "🛠 定制机器人")
+# === Inline 菜单按钮 ===
+def get_inline_menu():
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("▶️ Start", callback_data="start"),
+        types.InlineKeyboardButton("💱 设置交易", callback_data="setting")
+    )
+    markup.row(
+        types.InlineKeyboardButton("📖 指令大全", callback_data="help"),
+        types.InlineKeyboardButton("🔄 计算重启", callback_data="reset")
+    )
+    markup.row(
+        types.InlineKeyboardButton("❓ 需要帮助", url="https://t.me/yourgroup"),
+        types.InlineKeyboardButton("🛠 定制机器人", url="https://t.me/yourgroup")
+    )
     return markup
 
 # === 获取用户设定 ===
@@ -57,7 +61,7 @@ def get_user_setting(user_id):
         setting = cursor.fetchone()
     return setting
 
-# === 计算汇总 ===
+# === 汇总格式 ===
 def get_summary(user_id):
     cursor.execute("SELECT SUM(amount) as total, COUNT(*) as count FROM records WHERE user_id=%s", (user_id,))
     result = cursor.fetchone()
@@ -75,17 +79,36 @@ def get_summary(user_id):
 中介佣金：{setting['commission']}%
 
 应下发：{real_amount:.2f} {setting['currency']} | {usdt_amount:.2f} USDT
+已下发：0.0 {setting['currency']} | 0.0 USDT
+未下发：{real_amount:.2f} {setting['currency']} | {usdt_amount:.2f} USDT
 中介佣金应下发：{commission:.2f} USDT
 """
 
-# === 指令处理 ===
+# === 按钮处理 ===
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, "欢迎使用TG记账机器人！", reply_markup=get_main_menu())
+    bot.send_message(message.chat.id, "欢迎使用TG记账机器人！", reply_markup=get_inline_menu())
 
 @bot.message_handler(func=lambda msg: msg.text == "📋 菜单")
 def show_menu(message):
-    bot.send_message(message.chat.id, "请选择操作：", reply_markup=get_menu_options())
+    bot.send_message(message.chat.id, "请选择操作：", reply_markup=get_inline_menu())
+
+@bot.callback_query_handler(func=lambda call: True)
+def handle_menu_click(call):
+    if call.data == "start":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "欢迎使用TG记账机器人！", reply_markup=get_inline_menu())
+    elif call.data == "setting":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "格式如下：\n设置货币：RMB\n设置汇率：9\n设置费率：2\n中介佣金：0.5")
+    elif call.data == "help":
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "🧾 指令大全：\n设置货币：RMB\n设置汇率：9\n设置费率：2\n中介佣金：0.5\n+1000（入账）")
+    elif call.data == "reset":
+        cursor.execute("DELETE FROM records WHERE user_id=%s", (call.from_user.id,))
+        conn.commit()
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "✅ 今日记录已清空。")
 
 @bot.message_handler(func=lambda msg: msg.text.startswith("设置货币："))
 def set_currency(message):
@@ -96,26 +119,35 @@ def set_currency(message):
 
 @bot.message_handler(func=lambda msg: msg.text.startswith("设置汇率："))
 def set_rate(message):
-    value = float(message.text.split("：", 1)[1])
-    cursor.execute("UPDATE settings SET rate=%s WHERE user_id=%s", (value, message.from_user.id))
-    conn.commit()
-    bot.reply_to(message, f"设置成功 ✅\n汇率：{value}")
+    try:
+        value = float(message.text.split("：", 1)[1])
+        cursor.execute("UPDATE settings SET rate=%s WHERE user_id=%s", (value, message.from_user.id))
+        conn.commit()
+        bot.reply_to(message, f"设置成功 ✅\n汇率：{value}")
+    except:
+        bot.reply_to(message, "请输入正确格式，如：设置汇率：9")
 
 @bot.message_handler(func=lambda msg: msg.text.startswith("设置费率："))
 def set_fee(message):
-    value = float(message.text.split("：", 1)[1])
-    cursor.execute("UPDATE settings SET fee=%s WHERE user_id=%s", (value, message.from_user.id))
-    conn.commit()
-    bot.reply_to(message, f"设置成功 ✅\n费率：{value}%")
+    try:
+        value = float(message.text.split("：", 1)[1])
+        cursor.execute("UPDATE settings SET fee=%s WHERE user_id=%s", (value, message.from_user.id))
+        conn.commit()
+        bot.reply_to(message, f"设置成功 ✅\n费率：{value}%")
+    except:
+        bot.reply_to(message, "请输入正确格式，如：设置费率：2")
 
 @bot.message_handler(func=lambda msg: msg.text.startswith("中介佣金："))
 def set_commission(message):
-    value = float(message.text.split("：", 1)[1])
-    cursor.execute("UPDATE settings SET commission=%s WHERE user_id=%s", (value, message.from_user.id))
-    conn.commit()
-    bot.reply_to(message, f"设置成功 ✅\n中介佣金：{value}%")
+    try:
+        value = float(message.text.split("：", 1)[1])
+        cursor.execute("UPDATE settings SET commission=%s WHERE user_id=%s", (value, message.from_user.id))
+        conn.commit()
+        bot.reply_to(message, f"设置成功 ✅\n中介佣金：{value}%")
+    except:
+        bot.reply_to(message, "请输入正确格式，如：中介佣金：0.5")
 
-@bot.message_handler(func=lambda msg: msg.text.startswith("+"))
+@bot.message_handler(func=lambda msg: msg.text.strip().startswith("+"))
 def add_amount(message):
     try:
         amount = float(message.text.strip("+ "))
@@ -133,36 +165,7 @@ def add_amount(message):
         reply += f"\n{get_summary(user.id)}"
         bot.reply_to(message, reply)
     except:
-        bot.reply_to(message, "格式错误，请输入 +金额")
+        bot.reply_to(message, "格式错误，请输入 +金额，如 +1000")
 
-@bot.message_handler(func=lambda msg: msg.text == "📖 指令大全")
-def help_cmds(message):
-    bot.reply_to(message, """
-🧾 指令大全：
-- 设置货币：RMB
-- 设置汇率：9
-- 设置费率：2
-- 中介佣金：0.5
-- +1000（入账）
-""")
-
-@bot.message_handler(func=lambda msg: msg.text == "🔄 计算重启")
-def reset(message):
-    cursor.execute("DELETE FROM records WHERE user_id=%s", (message.from_user.id,))
-    conn.commit()
-    bot.reply_to(message, "✅ 今日记录已清空。")
-
-@bot.message_handler(func=lambda msg: msg.text == "💱 设置交易")
-def remind_format(message):
-    bot.reply_to(message, "格式如下：\n设置货币：RMB\n设置汇率：9\n设置费率：2\n中介佣金：0.5")
-
-@bot.message_handler(func=lambda msg: msg.text == "❓ 需要帮助")
-def help_link(message):
-    bot.reply_to(message, "加入群组获取帮助：https://t.me/yourgroup")
-
-@bot.message_handler(func=lambda msg: msg.text == "🛠 定制机器人")
-def custom_bot(message):
-    bot.reply_to(message, "联系管理员定制：https://t.me/yourgroup")
-
-# === 启动机器人 ===
+print("🤖 Bot polling started...")
 bot.polling()
