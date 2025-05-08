@@ -5,6 +5,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
 from telebot import types
+import re
 
 # === 环境变量 ===
 TOKEN = os.getenv("TOKEN")
@@ -101,42 +102,38 @@ def help_link(message):
 def custom_link(message):
     bot.send_message(message.chat.id, "联系管理员定制：https://t.me/yourgroup")
 
-@bot.message_handler(func=lambda msg: msg.text.startswith("设置货币："))
-def set_currency(message):
-    value = message.text.split("：", 1)[1].strip().upper()
-    cursor.execute("UPDATE settings SET currency=%s WHERE user_id=%s", (value, message.from_user.id))
+@bot.message_handler(func=lambda msg: any(k in msg.text.lower() for k in ["设置货币", "设置汇率", "设置费率", "中介佣金"]))
+def batch_setting(message):
+    text = message.text.replace("：", ":").replace("：", ":").replace("：", ":")
+    setting_data = dict(re.findall(r"(设置货币|设置汇率|设置费率|中介佣金)[:：]?\s*([\w.]+)", text))
+    user_id = message.from_user.id
+    updates = []
+
+    if "设置货币" in setting_data:
+        currency = setting_data["设置货币"].upper()
+        cursor.execute("UPDATE settings SET currency=%s WHERE user_id=%s", (currency, user_id))
+        updates.append(f"设置货币：{currency}")
+
+    if "设置汇率" in setting_data:
+        rate = float(setting_data["设置汇率"])
+        cursor.execute("UPDATE settings SET rate=%s WHERE user_id=%s", (rate, user_id))
+        updates.append(f"设置汇率：{rate}")
+
+    if "设置费率" in setting_data:
+        fee = float(setting_data["设置费率"])
+        cursor.execute("UPDATE settings SET fee=%s WHERE user_id=%s", (fee, user_id))
+        updates.append(f"设置费率：{fee}")
+
+    if "中介佣金" in setting_data:
+        commission = float(setting_data["中介佣金"])
+        cursor.execute("UPDATE settings SET commission=%s WHERE user_id=%s", (commission, user_id))
+        updates.append(f"中介佣金：{commission}")
+
     conn.commit()
-    bot.reply_to(message, f"设置成功 ✅\n货币：{value}")
-
-@bot.message_handler(func=lambda msg: msg.text.startswith("设置汇率："))
-def set_rate(message):
-    try:
-        value = float(message.text.split("：", 1)[1])
-        cursor.execute("UPDATE settings SET rate=%s WHERE user_id=%s", (value, message.from_user.id))
-        conn.commit()
-        bot.reply_to(message, f"设置成功 ✅\n汇率：{value}")
-    except:
-        bot.reply_to(message, "请输入正确格式，如：设置汇率：9")
-
-@bot.message_handler(func=lambda msg: msg.text.startswith("设置费率："))
-def set_fee(message):
-    try:
-        value = float(message.text.split("：", 1)[1])
-        cursor.execute("UPDATE settings SET fee=%s WHERE user_id=%s", (value, message.from_user.id))
-        conn.commit()
-        bot.reply_to(message, f"设置成功 ✅\n费率：{value}%")
-    except:
-        bot.reply_to(message, "请输入正确格式，如：设置费率：2")
-
-@bot.message_handler(func=lambda msg: msg.text.startswith("中介佣金："))
-def set_commission(message):
-    try:
-        value = float(message.text.split("：", 1)[1])
-        cursor.execute("UPDATE settings SET commission=%s WHERE user_id=%s", (value, message.from_user.id))
-        conn.commit()
-        bot.reply_to(message, f"设置成功 ✅\n中介佣金：{value}%")
-    except:
-        bot.reply_to(message, "请输入正确格式，如：中介佣金：0.5")
+    if updates:
+        bot.reply_to(message, "设置成功 ✅\n" + "\n".join(updates))
+    else:
+        bot.reply_to(message, "请使用正确格式输入设置内容，如：设置汇率：9")
 
 @bot.message_handler(func=lambda msg: msg.text.strip().startswith("+"))
 def add_amount(message):
