@@ -1,39 +1,42 @@
 from keep_alive import keep_alive
 import telebot
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from datetime import datetime
 import math
 import re
-
 import os
+
 TOKEN = os.getenv('TOKEN')
+DATABASE_URL = os.getenv('DATABASE_URL')
+
 bot = telebot.TeleBot(TOKEN)
 
-# 初始化数据库
-conn = sqlite3.connect('transactions.db', check_same_thread=False)
+# 初始化数据库连接
+conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 cursor = conn.cursor()
 
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS settings (
-    chat_id INTEGER PRIMARY KEY,
-    rate REAL DEFAULT 0,
-    fee_rate REAL DEFAULT 0,
-    commission_rate REAL DEFAULT 0
+    chat_id BIGINT PRIMARY KEY,
+    rate DOUBLE PRECISION DEFAULT 0,
+    fee_rate DOUBLE PRECISION DEFAULT 0,
+    commission_rate DOUBLE PRECISION DEFAULT 0
 )
 ''')
 
 cursor.execute('''
-CREATE TABLE IF NOT EXISTS transactions(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id INTEGER,
-    amount_cny REAL,
-    rate REAL,
-    fee_rate REAL,
-    commission_rate REAL,
-    amount_usdt REAL,
-    fee_usdt REAL,
-    commission_usdt REAL,
-    final_usdt REAL,
+CREATE TABLE IF NOT EXISTS transactions (
+    id SERIAL PRIMARY KEY,
+    chat_id BIGINT,
+    amount_cny DOUBLE PRECISION,
+    rate DOUBLE PRECISION,
+    fee_rate DOUBLE PRECISION,
+    commission_rate DOUBLE PRECISION,
+    amount_usdt DOUBLE PRECISION,
+    fee_usdt DOUBLE PRECISION,
+    commission_usdt DOUBLE PRECISION,
+    final_usdt DOUBLE PRECISION,
     status TEXT,
     date TEXT
 )
@@ -44,19 +47,19 @@ def ceil2(n):
     return math.ceil(n * 100) / 100.0
 
 def get_settings(chat_id):
-    cursor.execute('SELECT rate, fee_rate, commission_rate FROM settings WHERE chat_id=?', (chat_id,))
+    cursor.execute('SELECT rate, fee_rate, commission_rate FROM settings WHERE chat_id=%s', (chat_id,))
     row = cursor.fetchone()
-    return row if row else (0, 0, 0)
+    return (row['rate'], row['fee_rate'], row['commission_rate']) if row else (0, 0, 0)
 
 def show_summary(chat_id):
-    cursor.execute('SELECT * FROM transactions WHERE chat_id=?', (chat_id,))
+    cursor.execute('SELECT * FROM transactions WHERE chat_id=%s', (chat_id,))
     records = cursor.fetchall()
-    total_cny = sum(row[2] for row in records if row[10] in ('未下发', '已下发'))
-    total_usdt = sum(row[9] for row in records if row[10] != '删除')
-    total_sent = sum(row[9] for row in records if row[10] == '已下发')
-    total_commission = sum(row[8] for row in records if row[10] != '删除')
-    count_total = len([r for r in records if r[10] != '删除'])
-    count_sent = len([r for r in records if r[10] == '已下发'])
+    total_cny = sum(row['amount_cny'] for row in records if row['status'] in ('未下发', '已下发'))
+    total_usdt = sum(row['final_usdt'] for row in records if row['status'] != '删除')
+    total_sent = sum(row['final_usdt'] for row in records if row['status'] == '已下发')
+    total_commission = sum(row['commission_usdt'] for row in records if row['status'] != '删除')
+    count_total = len([r for r in records if r['status'] != '删除'])
+    count_sent = len([r for r in records if r['status'] == '已下发'])
 
     rate, fee, commission = get_settings(chat_id)
     reply = f"已入款（{count_total}笔）：{total_cny} 元\n"
@@ -95,8 +98,8 @@ def prompt_set(message):
 @bot.message_handler(func=lambda m: m.text == '🧹 计算重启')
 def clear_chat_data(message):
     chat_id = message.chat.id
-    cursor.execute('DELETE FROM transactions WHERE chat_id=?', (chat_id,))
-    cursor.execute('DELETE FROM settings WHERE chat_id=?', (chat_id,))
+    cursor.execute('DELETE FROM transactions WHERE chat_id=%s', (chat_id,))
+    cursor.execute('DELETE FROM settings WHERE chat_id=%s', (chat_id,))
     conn.commit()
     bot.send_message(chat_id, "✅ 当前窗口数据已归零，可重新开始设置")
 
@@ -120,8 +123,11 @@ def set_rates(message):
             rate, fee, commission = map(float, vals)
 
     if rate is not None:
-        cursor.execute('REPLACE INTO settings(chat_id, rate, fee_rate, commission_rate) VALUES (?, ?, ?, ?)',
-                       (chat_id, rate, fee, commission))
+        cursor.execute('''
+            INSERT INTO settings(chat_id, rate, fee_rate, commission_rate)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (chat_id) DO UPDATE SET rate = EXCLUDED.rate, fee_rate = EXCLUDED.fee_rate, commission_rate = EXCLUDED.commission_rate
+        ''', (chat_id, rate, fee, commission))
         conn.commit()
         bot.reply_to(message, f"设置成功\n固定汇率：{rate}\n固定费率：{fee}%\n中介佣金：{commission}%")
 
@@ -142,7 +148,7 @@ def add_entry(message):
 
     cursor.execute('''INSERT INTO transactions(chat_id, amount_cny, rate, fee_rate, commission_rate,
                       amount_usdt, fee_usdt, commission_usdt, final_usdt, status, date)
-                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
                    (chat_id, amount, rate, fee, commission, usdt, fee_u, comm_u, final, '未下发', now))
     conn.commit()
     bot.reply_to(message, f"✅ 已入款 +{amount} 元\n\n" + show_summary(chat_id))
@@ -152,10 +158,10 @@ def remove_last(message):
     chat_id = message.chat.id
     try:
         amt = float(re.sub(r'[^\d\.-]', '', message.text))
-        cursor.execute('SELECT id FROM transactions WHERE chat_id=? AND status="未下发" ORDER BY id DESC LIMIT 1', (chat_id,))
+        cursor.execute('SELECT id FROM transactions WHERE chat_id=%s AND status=%s ORDER BY id DESC LIMIT 1', (chat_id, '未下发'))
         row = cursor.fetchone()
         if row:
-            cursor.execute('UPDATE transactions SET status="删除" WHERE id=?', (row[0],))
+            cursor.execute('UPDATE transactions SET status=%s WHERE id=%s', ('删除', row['id']))
             conn.commit()
             bot.reply_to(message, f"已删除最近一笔 {amt} 元\n\n" + show_summary(chat_id))
         else:
@@ -167,10 +173,10 @@ def remove_last(message):
 def send_fund(message):
     chat_id = message.chat.id
     amt = float(re.sub(r'[^\d\.-]', '', message.text))
-    cursor.execute('SELECT id FROM transactions WHERE chat_id=? AND status="未下发" ORDER BY id ASC LIMIT 1', (chat_id,))
+    cursor.execute('SELECT id FROM transactions WHERE chat_id=%s AND status=%s ORDER BY id ASC LIMIT 1', (chat_id, '未下发'))
     row = cursor.fetchone()
     if row:
-        cursor.execute('UPDATE transactions SET status="已下发" WHERE id=?', (row[0],))
+        cursor.execute('UPDATE transactions SET status=%s WHERE id=%s', ('已下发', row['id']))
         conn.commit()
         bot.reply_to(message, f"✅ 下发 {amt} 元\n\n" + show_summary(chat_id))
     else:
@@ -183,8 +189,8 @@ def reset_user_data(message):
     if user_id != 6245295429:
         bot.reply_to(message, "❌ 你没有权限执行此操作")
         return
-    cursor.execute('DELETE FROM transactions WHERE chat_id=?', (chat_id,))
-    cursor.execute('DELETE FROM settings WHERE chat_id=?', (chat_id,))
+    cursor.execute('DELETE FROM transactions WHERE chat_id=%s', (chat_id,))
+    cursor.execute('DELETE FROM settings WHERE chat_id=%s', (chat_id,))
     conn.commit()
     bot.reply_to(message, "✅ 数据已归零，你可以重新开始设置。")
 
