@@ -115,7 +115,35 @@ def help_link(message):
 def custom_link(message):
     bot.send_message(message.chat.id, "联系管理员定制：https://t.me/yourgroup")
 
-@bot.message_handler(func=lambda msg: any(k in msg.text.lower() for k in ["设置货币", "设置汇率", "设置费率", "中介佣金"]))
+@bot.message_handler(func=lambda msg: any(k in msg.text for k in ["设置货币", "设置汇率", "设置费率", "中介佣金"]))
+def batch_setting(message):
+    text = message.text.replace("：", ":")
+    lines = re.split(r"[\n\r]+", text.strip())
+    user_id = message.from_user.id
+    updates = []
+    for line in lines:
+        line = line.strip()
+        if line.startswith("设置货币"):
+            value = re.sub(r"设置货币[:：\s]*", "", line).upper()
+            cursor.execute("UPDATE settings SET currency=%s WHERE user_id=%s", (value, user_id))
+            updates.append(f"设置货币：{value}")
+        elif line.startswith("设置汇率"):
+            value = re.sub(r"设置汇率[:：\s]*", "", line)
+            cursor.execute("UPDATE settings SET rate=%s WHERE user_id=%s", (float(value), user_id))
+            updates.append(f"设置汇率：{value}")
+        elif line.startswith("设置费率"):
+            value = re.sub(r"设置费率[:：\s]*", "", line)
+            cursor.execute("UPDATE settings SET fee=%s WHERE user_id=%s", (float(value), user_id))
+            updates.append(f"设置费率：{value}")
+        elif line.startswith("中介佣金"):
+            value = re.sub(r"中介佣金[:：\s]*", "", line)
+            cursor.execute("UPDATE settings SET commission=%s WHERE user_id=%s", (float(value), user_id))
+            updates.append(f"中介佣金：{value}")
+    conn.commit()
+    if updates:
+        bot.reply_to(message, "设置成功 ✅\n" + "\n".join(updates))
+    else:
+        bot.reply_to(message, "请使用正确格式输入设置内容，如：设置汇率：9")
 def batch_setting(message):
     text = message.text.replace("：", ":").replace("：", ":").replace("：", ":")
     setting_data = dict(re.findall(r"(设置货币|设置汇率|设置费率|中介佣金)[:：]?\s*([\w.]+)", text))
