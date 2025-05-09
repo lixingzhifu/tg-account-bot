@@ -2,190 +2,252 @@ import os
 import re
 import math
 import telebot
-import psycopg2
-from datetime import datetime, timezone, timedelta
-from psycopg2.extras import RealDictCursor
+import ps:contentReference[oaicite:9]{index=9}tCursor
 
-# —— 环境变量 —— #
-TOKEN = os.getenv('TOKEN')
-DATABASE_URL = os.getenv('DATABASE_URL')
+# ---------- 配置区域 ----------
+TOKEN = os.getenv("TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
+# ------------------------------
 
 bot = telebot.TeleBot(TOKEN)
+
+# 连接数据库
 conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 cursor = conn.cursor()
 
-# —— 建表 （首次运行或有改动时会重置） —— #
-cursor.execute('DROP TABLE IF EXISTS transactions;')
-cursor.execute('DROP TABLE IF EXISTS settings;')
-
-cursor.execute('''
-CREATE TABLE settings (
-  chat_id          BIGINT PRIMARY KEY,
-  currency         TEXT    NOT NULL DEFAULT 'RMB',
-  rate             DOUBLE PRECISION NOT NULL DEFAULT 0,
-  fee_rate         DOUBLE PRECISION NOT NULL DEFAULT 0,
-  commission_rate  DOUBLE PRECISION NOT NULL DEFAULT 0
+# 创建表（如果不存在）
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS settings (
+    chat_id        BIGINT    NOT NULL,
+    user_id        BIGINT    NOT NULL,
+    currency       TEXT      NOT NULL DEFAULT 'RMB',
+    rate           DOUBLE PRECISION NOT NULL DEFAULT 0,
+    fee_rate       DOUBLE PRECISION NOT NULL DEFAULT 0,
+    commission_rate DOUBLE PRECISION NOT NULL DEFAULT 0,
+    PRIMARY KEY (chat_id, user_id)
 );
-''')
-cursor.execute('''
-CREATE TABLE transactions (
-  id          SERIAL PRIMARY KEY,
-  chat_id     BIGINT NOT NULL,
-  name        TEXT    NOT NULL,
-  amount      DOUBLE PRECISION NOT NULL,
-  date        TIMESTAMP NOT NULL,
-  message_id  BIGINT
+""")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS transactions (
+    id              SERIAL    PRIMARY KEY,
+    chat_id         BIGINT    NOT NULL,
+    user_id         BIGINT    NOT NULL,
+    name            TEXT      NOT NULL,
+    amount          DOUBLE PRECISION NOT NULL,
+    rate            DOUBLE PRECISION NOT NULL,
+    fee_rate        DOUBLE PRECISION NOT NULL,
+    commission_rate DOUBLE PRECISION NOT NULL,
+    currency        TEXT      NOT NULL,
+    date            TIMESTAMP NOT NULL DEFAULT NOW()
 );
-''')
+""")
 conn.commit()
 
-# —— 帮助函数 —— #
 def ceil2(x):
+    """向上保留两位小数"""
     return math.ceil(x * 100) / 100.0
 
-def now_bj():
-    return datetime.now(timezone(timedelta(hours=8)))
-
-def get_settings(chat_id):
+def get_settings(chat_id, user_id):
     cursor.execute(
-        'SELECT currency, rate, fee_rate, commission_rate FROM settings WHERE chat_id=%s',
-        (chat_id,)
+        "SELECT currency, rate, fee_rate, commission_rate FROM settings WHERE chat_id=%s AND user_id=%s",
+        (chat_id, user_id)
     )
     row = cursor.fetchone()
-    return (row['currency'], row['rate'], row['fee_rate'], row['commission_rate']) if row else ('RMB',0,0,0)
+    if row:
+        return row['currency'], row['rate'], row['fee_rate'], row['commission_rate']
+    return "RMB", 0.0, 0.0, 0.0
 
-def set_settings(chat_id, cur, rate, fee, comm):
-    cursor.execute('''
-      UPDATE settings
-         SET currency=%s, rate=%s, fee_rate=%s, commission_rate=%s
-       WHERE chat_id=%s
-    ''', (cur, rate, fee, comm, chat_id))
-    if cursor.rowcount == 0:
-        cursor.execute('''
-          INSERT INTO settings(chat_id,currency,rate,fee_rate,commission_rate)
-          VALUES(%s,%s,%s,%s,%s)
-        ''', (chat_id, cur, rate, fee, comm))
-    conn.commit()
+def format_order_no(n):
+    """把序号格式化为 3 位，不够前面补 0"""
+    return f"{n:03d}"
 
-def build_summary(chat_id):
-    c, r, f, cm = get_settings(chat_id)
-    cursor.execute('SELECT * FROM transactions WHERE chat_id=%s ORDER BY date', (chat_id,))
-    rows = cursor.fetchall()
-    total = sum(rw['amount'] for rw in rows)
-    after_fee = ceil2(total * (1 - f/100))
-    send_usdt = ceil2(after_fee / r) if r else 0
-    comm_rmb = ceil2(total * cm/100)
-    comm_usdt = ceil2(comm_rmb / r) if r else 0
+def show_summary(chat_id, user_id):
+    # 抓出所有记录
+    cursor.execute(
+        "SELECT * FROM transactions WHERE chat_id=%s AND user_id=%s ORDER BY id",
+        (chat_id, user_id)
+    )
+    records = cursor.fetchall()
+
+    total_amount = sum(r['amount'] for r in records)
+    currency, rate, fee, commission = get_settings(chat_id, user_id)
+    # 计算“应下发”总值
+    net_total_rmb = ceil2(total_amount * (1 - fee/100))
+    net_total_usdt = ceil2(net_total_rmb / rate) if rate else 0
+
+    # 计算中介佣金总额
+    commission_rmb = ceil2(total_amount * commission/100)
+    commission_usdt = ceil2(commission_rmb / rate) if rate else 0
 
     lines = []
-    for i, rw in enumerate(rows, 1):
-        t = rw['date'].strftime('%H:%M:%S')
-        usdt = ceil2(rw['amount'] * (1 - f/100) / r) if r else 0
-        lines.append(f"{i:03d}. {t}  {rw['amount']}×{(1-f/100):.2f}/{r} = {usdt}  {rw['name']}")
-    footer = (
-        f"\n已入款（{len(rows)}笔）：{total} ({c})\n"
-        f"总入款金额：{total} ({c})\n汇率：{r}\n费率：{f}%\n佣金：{cm}%\n\n"
-        f"应下发：{after_fee}({c}) | {send_usdt} (USDT)\n"
-        f"已下发：0.0({c}) | 0.0 (USDT)\n"
-        f"未下发：{after_fee}({c}) | {send_usdt} (USDT)\n"
-    )
-    if cm > 0:
-        footer += f"\n中介佣金应下发：{comm_rmb}({c}) | {comm_usdt} (USDT)"
-    return "\n".join(lines) + "\n" + footer
+    for idx, r in enumerate(records, start=1):
+        t = r['date'].strftime("%d-%m-%Y %H:%M:%S")
+        after_fee = r['amount'] * (1 - r['fee_rate']/100)
+        usdt = ceil2(after_fee / r['rate']) if r['rate'] else 0
+        no = format_order_no(idx)
+        # 交易行
+        lines.append(f"{no}. {t}  {r['amount']}*{1-r['fee_rate']/100:.2f}/{r['rate']} = {usdt}  {r['name']}")
+        # 如果有佣金
+        if r['commission_rate'] > 0:
+            com_amt = ceil2(r['amount'] * r['commission_rate']/100)
+            lines.append(f"{no}. {t}  {r['amount']}*{r['commission_rate']/100:.2f} = {com_amt} 【佣金】")
 
-# —— Handlers —— #
+    reply = "\n".join(lines) + "\n\n"
+    reply += f"已入款（{len(records)}笔）：{total_amount} ({currency})\n"
+    reply += f"已下发（0笔）：0.0 (USDT)\n\n"
+    reply += f"总入款金额：{total_amount} ({currency})\n"
+    reply += f"汇率：{rate}\n费率：{fee}%\n佣金：{commission}%\n\n"
+    reply += f"应下发：{net_total_rmb}({currency}) | {net_total_usdt} (USDT)\n"
+    reply += f"已下发：0.0({currency}) | 0.0 (USDT)\n"
+    reply += f"未下发：{net_total_rmb}({currency}) | {net_total_usdt} (USDT)\n"
+    if commission > 0:
+        reply += f"\n中介佣金应下发：{commission_rmb}({currency}) | {commission_usdt} (USDT)"
+    return reply
+
+# ---- Bot Handlers ----
 
 @bot.message_handler(commands=['start'])
-def on_start(m):
+def handle_start(msg):
     kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.row('💱 设置交易','📘 指令大全')
-    kb.row('🔁 清零记录','📊 汇总')
-    bot.send_message(m.chat.id, "欢迎使用 LX 记账机器人 ✅\n请选择：", reply_markup=kb)
-
-@bot.message_handler(func=lambda m: m.text in ['设置交易','💱 设置交易'])
-def on_show_trade(m):
-    bot.reply_to(m,
-      "设置交易指令\n"
-      "设置货币：RMB\n"
-      "设置汇率：0\n"
-      "设置费率：0\n"
-      "中介佣金：0"
+    kb.row("/trade", "/reset")
+    kb.row("/summary", "/id")
+    bot.send_message(msg.chat.id,
+        "欢迎使用 LX 记账机器人 ✅\n"
+        "请选择：",
+        reply_markup=kb
     )
 
-@bot.message_handler(func=lambda m: '设置交易指令' in (m.text or ''))
-def on_set_trade(m):
-    lines = m.text.replace('：',':').splitlines()
-    data = {'货币':None,'汇率':None,'费率':None,'中介佣金':None}
-    errs = []
-    for L in lines:
-        L2 = L.replace(' ','').strip()
-        for k in data:
-            if L2.startswith(k):
-                val = L2.split(':',1)[1]
-                if k=='货币':
-                    data[k] = val or 'RMB'
-                else:
-                    try:
-                        data[k] = float(re.findall(r'\d+\.?\d*',val)[0])
-                    except:
-                        errs.append(f"{k}格式错误")
-    if errs or data['汇率'] is None:
-        bot.reply_to(m, "设置错误\n" + ("\n".join(errs) if errs else "缺少汇率"))
+@bot.message_handler(commands=['id'])
+def handle_id(msg):
+    bot.reply_to(msg, f"你的 chat_id={msg.chat.id}\n你的 user_id={msg.from_user.id}")
+
+@bot.message_handler(commands=['reset'])
+def handle_reset(msg):
+    cursor.execute(
+        "DELETE FROM transactions WHERE chat_id=%s AND user_id=%s",
+        (msg.chat.id, msg.from_user.id)
+    )
+    cursor.execute(
+        "DELETE FROM settings WHERE chat_id=%s AND user_id=%s",
+        (msg.chat.id, msg.from_user.id)
+    )
+    conn.commit()
+    bot.reply_to(msg, "🔄 已清空所有该用户的配置与记录")
+
+@bot.message_handler(commands=['trade'])
+def handle_trade_sample(msg):
+    bot.reply_to(msg,
+        "设置交易指令\n"
+        "设置货币：RMB\n"
+        "设置汇率：0\n"
+        "设置费率：0\n"
+        "中介佣金：0"
+    )
+
+@bot.message_handler(func=lambda m: m.text and m.text.startswith("设置交易指令"))
+def handle_setting(msg):
+    text = msg.text.replace('：',':').strip().splitlines()
+    currency = rate = fee = commission = None
+    errors = []
+    for line in text:
+        line = line.strip().replace(' ','')
+        if line.startswith("设置货币:"):
+            currency = line.split(":",1)[1].upper() or "RMB"
+        elif line.startswith("设置汇率:"):
+            try:
+                rate = float(re.findall(r"\d+\.?\d*", line)[0])
+            except:
+                errors.append("汇率格式错误")
+        elif line.startswith("设置费率:"):
+            try:
+                fee = float(re.findall(r"\d+\.?\d*", line)[0])
+            except:
+                errors.append("费率格式错误")
+        elif line.startswith("中介佣金:"):
+            try:
+                commission = float(re.findall(r"\d+\.?\d*", line)[0])
+            except:
+                errors.append("中介佣金格式错误")
+    if errors or rate is None:
+        bot.reply_to(msg, "设置错误\n" + ("\n".join(errors) if errors else "缺少汇率"))
         return
-    set_settings(m.chat.id, data['货币'], data['汇率'], data['费率'], data['中介佣金'])
-    bot.reply_to(m,
-      "✅ 设置成功\n"
-      f"设置货币：{data['货币']}\n"
-      f"设置汇率：{data['汇率']}\n"
-      f"设置费率：{data['费率']}%\n"
-      f"中介佣金：{data['中介佣金']}%"
-    )
 
-@bot.message_handler(func=lambda m: re.match(r'^([+\-]|加|减)\s*\d+(\.\d+)?', m.text or ''))
-def on_amount(m):
-    txt = m.text.strip()
-    op  = '+' if txt[0] in '+加' else '-'
-    num = float(re.findall(r'\d+\.?\d*',txt)[0])
-    cid = m.chat.id
-
-    if op=='-':
-        cursor.execute("DELETE FROM transactions WHERE chat_id=%s ORDER BY id DESC LIMIT 1", (cid,))
+    # 插入或更新
+    try:
+        cursor.execute("""
+            INSERT INTO settings(chat_id, user_id, currency, rate, fee_rate, commission_rate)
+            VALUES (%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (chat_id,user_id) DO UPDATE SET
+                currency      = EXCLUDED.currency,
+                rate          = EXCLUDED.rate,
+                fee_rate      = EXCLUDED.fee_rate,
+                commission_rate = EXCLUDED.commission_rate
+        """, (
+            msg.chat.id, msg.from_user.id,
+            currency, rate, fee or 0.0, commission or 0.0
+        ))
         conn.commit()
-        return bot.reply_to(m, "🗑 已删除最近一笔记录")
+        bot.reply_to(msg,
+            "✅ 设置成功\n"
+            f"设置货币：{currency}\n"
+            f"设置汇率：{rate}\n"
+            f"设置费率：{fee or 0.0}%\n"
+            f"中介佣金：{commission or 0.0}%"
+        )
+    except Exception as e:
+        conn.rollback()
+        bot.reply_to(msg, f"设置失败：{e}")
 
-    name = m.from_user.username or m.from_user.first_name or '匿名'
-    cursor.execute('''
-      INSERT INTO transactions(chat_id,name,amount,date,message_id)
-      VALUES(%s,%s,%s,%s,%s) RETURNING id
-    ''', (cid, name, num, now_bj(), m.message_id))
-    new_id = cursor.fetchone()['id']
+@bot.message_handler(func=lambda m: re.match(r'^[+-]\d+(\.\d+)?$', m.text.strip()))
+def handle_amount(msg):
+    sign, num = msg.text.strip()[0], msg.text.strip()[1:]
+    try:
+        amt = float(num)
+    except:
+        return
+
+    # 记录交易
+    name = msg.from_user.username or msg.from_user.first_name or "匿名"
+    cid, uid = msg.chat.id, msg.from_user.id
+    currency, rate, fee, commission = get_settings(cid, uid)
+    now = datetime.now()
+    cursor.execute("""
+        INSERT INTO transactions(chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, date)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    """, (
+        cid, uid, name, amt, rate, fee, commission, currency, now
+    ))
     conn.commit()
 
-    bot.reply_to(m,
-      f"✅ 已入款 +{num}\n编号：{new_id:03d}\n" + build_summary(cid)
-    )
+    # 取当前这一笔的序号
+    cursor.execute("""
+        SELECT count(*) AS cnt FROM transactions
+        WHERE chat_id=%s AND user_id=%s
+    """, (cid, uid))
+    no = cursor.fetchone()['cnt']
 
-@bot.message_handler(func=lambda m: m.text in ['🔁 清零记录','/reset'])
-def on_reset(m):
-    cursor.execute("DELETE FROM transactions WHERE chat_id=%s", (m.chat.id,))
-    conn.commit()
-    bot.reply_to(m, "🔄 已清空记录")
+    # 拼消息
+    after_fee = amt * (1 - fee/100)
+    usdt = ceil2(after_fee / rate) if rate else 0
+    com_rmb = ceil2(amt * commission/100)
+    com_usdt = ceil2(com_rmb / rate) if rate else 0
 
-@bot.message_handler(func=lambda m: m.text in ['📊 汇总','/summary'])
-def on_summary(m):
-    bot.reply_to(m, build_summary(m.chat.id))
+    reply = []
+    reply.append(f"✅ 已入款 {sign}{amt:.2f} ({currency})")
+    reply.append(f"编号：{format_order_no(no)}")
+    tstr = now.strftime("%d-%m-%Y %H:%M:%S")
+    reply.append(f"{tstr}  {amt}*{1-fee/100:.2f}/{rate} = {usdt}  @{name}")
+    if commission>0:
+        reply.append(f"{tstr}  {amt}*{commission/100:.2f} = {com_rmb} 【佣金】")
+    reply.append("")  # 空行
+    reply.append(show_summary(cid, uid))
 
-@bot.message_handler(func=lambda m: m.text in ['📘 指令大全','/help'])
-def on_help(m):
-    bot.reply_to(m,
-      "📋 指令大全\n"
-      "/start — 显示菜单\n"
-      "设置交易 — 进入参数设置\n"
-      "+1000 — 记入款 1000\n"
-      "-1000 — 删除最近一笔\n"
-      "🔁 清零记录 — 清空记账\n"
-      "📊 汇总 — 查看汇总"
-    )
+    bot.reply_to(msg, "\n".join(reply))
+
+@bot.message_handler(commands=['summary'])
+def handle_summary(msg):
+    cid, uid = msg.chat.id, msg.from_user.id
+    bot.reply_to(msg, show_summary(cid, uid))
 
 bot.remove_webhook()
 bot.infinity_polling()
