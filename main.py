@@ -65,7 +65,6 @@ def handle_start(message):
 
 @bot.message_handler(commands=['trade'])
 def handle_trade_menu(message):
-    # 显示当前配置示例
     chat_id = message.chat.id
     user_id = message.from_user.id
     currency, rate, fee, commission = get_settings(chat_id, user_id)
@@ -83,7 +82,6 @@ def handle_trade_menu(message):
 def set_trade_config(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
-    # 分析多行参数
     lines = message.text.replace('：', ':').split('\n')[1:]
     params = {'currency': None, 'rate': None, 'fee_rate': None, 'commission_rate': None}
     for line in lines:
@@ -91,42 +89,57 @@ def set_trade_config(message):
             key, val = line.split(':', 1)
             key = key.strip()
             val = val.strip()
-            if key == '设置货币': params['currency'] = val
+            if key == '设置货币':
+                params['currency'] = val
             elif key == '设置汇率':
-                try: params['rate'] = float(val)
-                except: return bot.reply_to(message, '设置失败\n汇率格式请设置数字')
+                try:
+                    params['rate'] = float(val)
+                except:
+                    return bot.reply_to(message, '设置失败\n汇率格式请设置数字')
             elif key == '设置费率':
-                try: params['fee_rate'] = float(val)
-                except: return bot.reply_to(message, '设置失败\n费率格式请设置数字')
+                try:
+                    params['fee_rate'] = float(val)
+                except:
+                    return bot.reply_to(message, '设置失败\n费率格式请设置数字')
             elif key == '中介佣金':
-                try: params['commission_rate'] = float(val)
-                except: return bot.reply_to(message, '设置失败\n中介佣金请设置数字')
-    # 检查必填项
+                try:
+                    params['commission_rate'] = float(val)
+                except:
+                    return bot.reply_to(message, '设置失败\n中介佣金请设置数字')
+    # 必填检查
     if params['rate'] is None:
         return bot.reply_to(message, '设置失败\n至少需要提供汇率，例如：设置汇率：9')
-    # 写入数据库
+    # upsert 手动执行，避免冲突
     cursor.execute(
-        '''INSERT INTO settings(chat_id, user_id, currency, rate, fee_rate, commission_rate)
-           VALUES (%s,%s,%s,%s,%s,%s)
-           ON CONFLICT (chat_id, user_id)
-           DO UPDATE SET currency=EXCLUDED.currency, rate=EXCLUDED.rate,
-                         fee_rate=EXCLUDED.fee_rate, commission_rate=EXCLUDED.commission_rate
-        ''',
-        (chat_id, user_id, params['currency'] or 'RMB',
-         params['rate'], params['fee_rate'] or 0, params['commission_rate'] or 0)
+        'SELECT 1 FROM settings WHERE chat_id=%s AND user_id=%s',
+        (chat_id, user_id)
     )
+    exists = cursor.fetchone()
+    if exists:
+        cursor.execute(
+            '''UPDATE settings SET currency=%s, rate=%s, fee_rate=%s, commission_rate=%s
+               WHERE chat_id=%s AND user_id=%s''',
+            (params['currency'] or 'RMB', params['rate'], params['fee_rate'] or 0,
+             params['commission_rate'] or 0, chat_id, user_id)
+        )
+    else:
+        cursor.execute(
+            '''INSERT INTO settings (chat_id, user_id, currency, rate, fee_rate, commission_rate)
+               VALUES (%s, %s, %s, %s, %s, %s)''',
+            (chat_id, user_id, params['currency'] or 'RMB', params['rate'],
+             params['fee_rate'] or 0, params['commission_rate'] or 0)
+        )
     conn.commit()
     bot.reply_to(
         message,
         f"✅ 设置成功\n"
         f"设置货币：{params['currency']}\n"
-        f"设置汇率：{params['rate']}%\n"
-        f"设置费率：{params['fee_rate']}%\n"
-        f"中介佣金：{params['commission_rate']}%"
+        f"设置汇率：{params['rate']}\n"
+        f"设置费率：{params['fee_rate']}\n"
+        f"中介佣金：{params['commission_rate']}"
     )
 
-# 如需其他命令，再依样添加…
+# 其他命令可按需添加 …
 
 if __name__ == '__main__':
-    # 轮询方式运行
     bot.infinity_polling(timeout=60)
