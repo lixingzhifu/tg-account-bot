@@ -95,12 +95,6 @@ def handle_set_command(message):
 
 @bot.message_handler(func=lambda m: m.text and '设置交易指令' in m.text)
 def set_trade_config(message):
-    def set_trade_config(message):
-    print("收到设置交易指令：", message.text)
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-    ...
-
     chat_id = message.chat.id
     user_id = message.from_user.id
     text = message.text.replace('：', ':').upper()
@@ -139,17 +133,21 @@ def set_trade_config(message):
     if errors:
         bot.reply_to(message, "设置错误\n" + '\n'.join(errors))
     elif rate is not None:
-        cursor.execute('''
-            INSERT INTO settings(chat_id, user_id, currency, rate, fee_rate, commission_rate)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (chat_id, user_id) DO UPDATE SET
-                currency = EXCLUDED.currency,
-                rate = EXCLUDED.rate,
-                fee_rate = EXCLUDED.fee_rate,
-                commission_rate = EXCLUDED.commission_rate
-        ''', (chat_id, user_id, currency or 'RMB', rate, fee or 0, commission or 0))
-        conn.commit()
-        bot.reply_to(message, f"✅ 设置成功\n设置货币：{currency or 'RMB'}\n设置汇率：{rate}\n设置费率：{fee or 0}%\n中介佣金：{commission or 0}%")
+        try:
+            cursor.execute('''
+                INSERT INTO settings(chat_id, user_id, currency, rate, fee_rate, commission_rate)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (chat_id, user_id) DO UPDATE SET
+                    currency = EXCLUDED.currency,
+                    rate = EXCLUDED.rate,
+                    fee_rate = EXCLUDED.fee_rate,
+                    commission_rate = EXCLUDED.commission_rate
+            ''', (chat_id, user_id, currency or 'RMB', rate, fee or 0, commission or 0))
+            conn.commit()
+            bot.reply_to(message, f"✅ 设置成功\n设置货币：{currency or 'RMB'}\n设置汇率：{rate}\n设置费率：{fee or 0}%\n中介佣金：{commission or 0}%")
+        except Exception as e:
+            conn.rollback()
+            bot.reply_to(message, f"设置失败，请检查格式或联系管理员\n错误信息：{e}")
     else:
         bot.reply_to(message, "设置错误，缺少汇率，请至少设置汇率")
 
