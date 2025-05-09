@@ -1,19 +1,16 @@
-from keep_alive import keep_alive
 import telebot
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import os
 from datetime import datetime
 import math
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import re
-import os
-from flask import Flask, request
-from telebot.types import Update
 
-TOKEN = os.getenv('TOKEN')  # 确保环境变量已设为完整 Bot Token
-DATABASE_URL = os.getenv('DATABASE_URL')
+# ===== 配置你的 Token 和数据库地址 =====
+TOKEN = os.getenv("TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 bot = telebot.TeleBot(TOKEN)
-
 conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 cursor = conn.cursor()
 
@@ -44,34 +41,15 @@ def ceil2(n):
     return math.ceil(n * 100) / 100.0
 
 def get_settings(chat_id):
-    cursor.execute('SELECT currency, rate, fee_rate, commission_rate FROM settings WHERE chat_id=%s', (chat_id,))
+    cursor.execute('SELECT * FROM settings WHERE chat_id=%s', (chat_id,))
     row = cursor.fetchone()
     return (row['currency'], row['rate'], row['fee_rate'], row['commission_rate']) if row else ('RMB', 0, 0, 0)
 
-def show_summary(chat_id):
-    cursor.execute('SELECT * FROM transactions WHERE chat_id=%s', (chat_id,))
-    records = cursor.fetchall()
-    total = sum(row['amount'] for row in records)
-    currency, rate, fee, commission = get_settings(chat_id)
-    converted_total = ceil2(total * (1 - fee / 100) / rate) if rate else 0
-    commission_total_rmb = ceil2(total * commission / 100)
-    commission_total_usdt = ceil2(commission_total_rmb / rate) if rate else 0
-    reply = f"\n已入款（{len(records)}笔）：{total} ({currency})"
-    reply += f"\n已下发（0笔）：0.0 (USDT)\n"
-    reply += f"\n总入款金额：{total} ({currency})"
-    reply += f"\n汇率：{rate}\n费率：{fee}%\n佣金：{commission}%\n"
-    reply += f"\n应下发：{ceil2(total * (1 - fee / 100))}({currency}) | {converted_total} (USDT)"
-    reply += f"\n已下发：0.0({currency}) | 0.0 (USDT)"
-    reply += f"\n未下发：{ceil2(total * (1 - fee / 100))}({currency}) | {converted_total} (USDT)"
-    if commission > 0:
-        reply += f"\n\n中介佣金应下发：{commission_total_rmb}({currency}) | {commission_total_usdt} (USDT)"
-    return reply
-
 @bot.message_handler(commands=['start'])
-def handle_start(message):
+def start(message):
     bot.reply_to(message, "欢迎使用 LX 记账机器人 ✅\n请输入 +1000 或者 设置汇率 等命令来开始使用。")
 
-@bot.message_handler(func=lambda m: m.text.lower().startswith('设置'))
+@bot.message_handler(func=lambda m: m.text.lower().startswith("设置"))
 def set_config(message):
     chat_id = message.chat.id
     text = message.text.replace('：', ':').replace(' ', '').upper()
@@ -85,49 +63,32 @@ def set_config(message):
             fee = float(re.search(r'(\d+\.?\d*)', line).group(1))
         elif '佣金' in line:
             commission = float(re.search(r'(\d+\.?\d*)', line).group(1))
-    if rate is not None:
+    if rate:
         cursor.execute('''
-            INSERT INTO settings(chat_id, currency, rate, fee_rate, commission_rate)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (chat_id) DO UPDATE SET
+        INSERT INTO settings(chat_id, currency, rate, fee_rate, commission_rate)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (chat_id) DO UPDATE SET
             currency = EXCLUDED.currency,
             rate = EXCLUDED.rate,
             fee_rate = EXCLUDED.fee_rate,
             commission_rate = EXCLUDED.commission_rate
         ''', (chat_id, currency or 'RMB', rate, fee or 0, commission or 0))
         conn.commit()
-        bot.reply_to(message, f"设置成功\n固定汇率：{rate}\n固定费率：{fee}%\n中介佣金：{commission}%")
+        bot.reply_to(message, f"设置成功\n汇率：{rate}\n费率：{fee}%\n佣金：{commission}%")
 
 @bot.message_handler(func=lambda m: re.match(r'^[+加]\s*\d+', m.text.strip()))
-def add_transaction(message):
+def add_amount(message):
     chat_id = message.chat.id
-    text = message.text.strip()
-    amount = float(re.findall(r'\d+\.?\d*', text)[0])
     name = message.from_user.first_name or '匿名'
+    amount = float(re.findall(r'\d+\.?\d*', message.text)[0])
     currency, rate, fee, commission = get_settings(chat_id)
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    cursor.execute('''INSERT INTO transactions(chat_id, name, amount, rate, fee_rate, commission_rate, currency, date)
-                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
-                   (chat_id, name, amount, rate, fee, commission, currency, now))
+    cursor.execute('''
+        INSERT INTO transactions(chat_id, name, amount, rate, fee_rate, commission_rate, currency, date)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    ''', (chat_id, name, amount, rate, fee, commission, currency, now))
     conn.commit()
-    bot.reply_to(message, f"✅ 已入款 +{amount} ({currency})\n日期\n" + show_summary(chat_id))
+    bot.reply_to(message, f"✅ {name} 入款 +{amount} {currency}")
 
-# Flask & Webhook
-app = Flask(__name__)
-
-@app.route('/')
-def index():
-    return "Bot is running."
-
-@app.route(f'/{TOKEN}', methods=['POST'])
-def webhook():
-    update = Update.de_json(request.stream.read().decode("utf-8"))
-    bot.process_new_updates([update])
-    return "ok"
-
-# 启动保活服务 + 设置Webhook
-keep_alive()
-
-WEBHOOK_URL = f"https://grateful-fulfillment-production.up.railway.app/{TOKEN}"
-bot.remove_webhook()
-bot.set_webhook(url=WEBHOOK_URL)
+print("Bot is polling...")
+bot.infinity_polling()
