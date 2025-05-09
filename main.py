@@ -1,181 +1,149 @@
-import telebot
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from datetime import datetime
-import math
-import re
+from aiogram import Bot, Dispatcher, types, executor
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+import asyncio
 import os
+from datetime import datetime
 
-TOKEN = os.getenv('TOKEN')
-DATABASE_URL = os.getenv('DATABASE_URL')
+API_TOKEN = os.getenv("BOT_TOKEN")  # Set this in your Railway environment
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher(bot)
 
-bot = telebot.TeleBot(TOKEN)
+user_settings = {}  # user_id: {currency, rate, fee, commission, records: []}
 
-conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-cursor = conn.cursor()
+# --- Keyboards ---
+menu_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+menu_keyboard.add(
+    KeyboardButton("菜单")
+)
 
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS settings (
-    chat_id BIGINT,
-    user_id BIGINT,
-    currency TEXT DEFAULT 'RMB',
-    rate DOUBLE PRECISION DEFAULT 0,
-    fee_rate DOUBLE PRECISION DEFAULT 0,
-    commission_rate DOUBLE PRECISION DEFAULT 0,
-    PRIMARY KEY (chat_id, user_id)
-)''')
+submenu_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+submenu_keyboard.add(
+    KeyboardButton("设置交易"),
+    KeyboardButton("指令大全")
+)
+submenu_keyboard.add(
+    KeyboardButton("计算重启"),
+    KeyboardButton("需要帮助"),
+    KeyboardButton("定制机器人")
+)
 
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS transactions (
-    id SERIAL PRIMARY KEY,
-    chat_id BIGINT,
-    user_id BIGINT,
-    name TEXT,
-    amount DOUBLE PRECISION,
-    rate DOUBLE PRECISION,
-    fee_rate DOUBLE PRECISION,
-    commission_rate DOUBLE PRECISION,
-    currency TEXT,
-    date TEXT,
-    message_id BIGINT
-)''')
-conn.commit()
+# --- Commands ---
+@dp.message_handler(commands=['start'])
+async def send_welcome(message: types.Message):
+    await message.reply("欢迎使用记账机器人，请点击下方菜单进行操作。", reply_markup=menu_keyboard)
 
-def ceil2(n):
-    return math.ceil(n * 100) / 100.0
+@dp.message_handler(lambda m: m.text == "菜单")
+async def show_menu(message: types.Message):
+    await message.reply("请选择功能：", reply_markup=submenu_keyboard)
 
-def get_settings(chat_id, user_id):
-    cursor.execute('SELECT currency, rate, fee_rate, commission_rate FROM settings WHERE chat_id=%s AND user_id=%s', (chat_id, user_id))
-    row = cursor.fetchone()
-    return (row['currency'], row['rate'], row['fee_rate'], row['commission_rate']) if row else ('RMB', 0, 0, 0)
-
-def show_summary(chat_id, user_id):
-    cursor.execute('SELECT * FROM transactions WHERE chat_id=%s AND user_id=%s', (chat_id, user_id))
-    records = cursor.fetchall()
-    total = sum(row['amount'] for row in records)
-    currency, rate, fee, commission = get_settings(chat_id, user_id)
-    converted_total = ceil2(total * (1 - fee / 100) / rate) if rate else 0
-    commission_total_rmb = ceil2(total * commission / 100)
-    commission_total_usdt = ceil2(commission_total_rmb / rate) if rate else 0
-    reply = ''
-    today = datetime.now().strftime('%d-%m-%Y')
-    for i, row in enumerate(records, 1):
-        t = datetime.strptime(row['date'], '%Y-%m-%d %H:%M:%S').strftime('%H:%M:%S')
-        after_fee = row['amount'] * (1 - row['fee_rate'] / 100)
-        usdt = ceil2(after_fee / row['rate']) if row['rate'] else 0
-        line = f"{i}. {t} {row['amount']}*{(1 - row['fee_rate'] / 100):.2f}/{row['rate']} = {usdt}  {row['name']}\n"
-        if row['commission_rate'] > 0:
-            commission_amt = row['amount'] * row['commission_rate'] / 100
-            line += f"{i}. {t} {row['amount']}*{row['commission_rate'] / 100} = {ceil2(commission_amt)} 【佣金】\n"
-        reply += line
-    reply += f"\n已入款（{len(records)}笔）：{total} ({currency})\n"
-    reply += f"已下发（0笔）：0.0 (USDT)\n\n"
-    reply += f"总入款金额：{total} ({currency})\n"
-    reply += f"汇率：{rate}\n费率：{fee}%\n佣金：{commission}%\n\n"
-    reply += f"应下发：{ceil2(total * (1 - fee / 100))}({currency}) | {converted_total} (USDT)\n"
-    reply += f"已下发：0.0({currency}) | 0.0 (USDT)\n"
-    reply += f"未下发：{ceil2(total * (1 - fee / 100))}({currency}) | {converted_total} (USDT)\n"
-    if commission > 0:
-        reply += f"\n中介佣金应下发：{commission_total_rmb}({currency}) | {commission_total_usdt} (USDT)"
-    return reply
-
-@bot.message_handler(commands=['start'])
-def handle_start(message):
-    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row('💱 设置交易', '📘 指令大全')
-    markup.row('🔁 计算重启', '📊 汇总')
-    markup.row('❓ 需要帮助', '🛠️ 定制机器人')
-    reply = "欢迎使用 LX 记账机器人 ✅\n请从下方菜单选择操作："
-    bot.send_message(message.chat.id, reply, reply_markup=markup)
-
-@bot.message_handler(commands=['id'])
-def handle_id(message):
-    bot.reply_to(message, f"你的 chat_id 是：{message.chat.id}\n你的 user_id 是：{message.from_user.id}")
-
-@bot.message_handler(func=lambda m: m.text.strip() in ['设置交易', '💱 设置交易'])
-def handle_set_command(message):
-    reply = "设置交易指令\n设置货币：RMB\n设置汇率：0\n设置费率：0\n中介佣金：0"
-    bot.reply_to(message, reply)
-
-@bot.message_handler(func=lambda m: m.text and '设置交易指令' in m.text)
-def set_trade_config(message):
-    chat_id = message.chat.id
+@dp.message_handler(lambda m: m.text == "设置交易")
+async def setup_transaction(message: types.Message):
     user_id = message.from_user.id
-    text = message.text.replace('：', ':').upper()
+    user_settings[user_id] = user_settings.get(user_id, {"currency": "RMB", "rate": 1.0, "fee": 0.0, "commission": 0.0, "records": []})
+    await message.reply(
+        "设置交易指令\n设置货币：\n设置汇率：\n设置费率：\n中介佣金："
+    )
 
-    currency = rate = fee = commission = None
-    errors = []
+@dp.message_handler(lambda m: m.text.startswith("设置汇率："))
+async def set_rate(message: types.Message):
+    user_id = message.from_user.id
+    try:
+        rate = float(message.text.split("：")[1])
+        user_settings.setdefault(user_id, {}).update({"rate": rate})
+        await message.reply(f"✅ 汇率设置为：{rate}")
+    except:
+        await message.reply("设置失败，请输入格式：设置汇率：9")
 
-    for line in text.split('\n'):
-        line = line.strip().replace(' ', '')
-        if '货币' in line:
-            match = re.search(r'货币[:：]?(.*)', line)
-            if match:
-                currency = re.sub(r'[^A-Z]', '', match.group(1).strip().upper())
-        elif '汇率' in line:
-            match = re.search(r'汇率[:：]?(.*)', line)
-            if match:
-                try:
-                    rate = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
-                except:
-                    errors.append("汇率格式错误")
-        elif '费率' in line:
-            match = re.search(r'费率[:：]?(.*)', line)
-            if match:
-                try:
-                    fee = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
-                except:
-                    errors.append("费率格式错误")
-        elif '佣金' in line:
-            match = re.search(r'佣金[:：]?(.*)', line)
-            if match:
-                try:
-                    commission = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
-                except:
-                    errors.append("中介佣金请设置数字")
+@dp.message_handler(lambda m: m.text.startswith("设置费率："))
+async def set_fee(message: types.Message):
+    user_id = message.from_user.id
+    try:
+        fee = float(message.text.split("：")[1])
+        user_settings.setdefault(user_id, {}).update({"fee": fee})
+        await message.reply(f"✅ 费率设置为：{fee}%")
+    except:
+        await message.reply("设置失败，请输入格式：设置费率：2")
 
-    if errors:
-        bot.reply_to(message, "设置错误\n" + '\n'.join(errors))
-    elif rate is not None:
-        try:
-            cursor.execute('''
-                INSERT INTO settings(chat_id, user_id, currency, rate, fee_rate, commission_rate)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (chat_id, user_id) DO UPDATE SET
-                    currency = EXCLUDED.currency,
-                    rate = EXCLUDED.rate,
-                    fee_rate = EXCLUDED.fee_rate,
-                    commission_rate = EXCLUDED.commission_rate
-            ''', (chat_id, user_id, currency or 'RMB', rate, fee or 0, commission or 0))
-            conn.commit()
-            bot.reply_to(message, f"✅ 设置成功\n设置货币：{currency or 'RMB'}\n设置汇率：{rate}\n设置费率：{fee or 0}%\n中介佣金：{commission or 0}%")
-        except Exception as e:
-            conn.rollback()
-            bot.reply_to(message, f"设置失败，请检查格式或联系管理员\n错误信息：{e}")
-    else:
-        bot.reply_to(message, "设置错误，缺少汇率，请至少设置汇率")
+@dp.message_handler(lambda m: m.text.startswith("中介佣金："))
+async def set_commission(message: types.Message):
+    user_id = message.from_user.id
+    try:
+        comm = float(message.text.split("：")[1])
+        user_settings.setdefault(user_id, {}).update({"commission": comm})
+        await message.reply(f"✅ 中介佣金设置为：{comm}%")
+    except:
+        await message.reply("设置失败，请输入格式：中介佣金：0.5")
 
-@bot.message_handler(func=lambda m: re.match(r'^([+加]\s*\d+)|(.+\s*[+加]\s*\d+)', m.text))
-def add_transaction(message):
-    chat_id = message.chat.id
+@dp.message_handler(lambda m: m.text == "计算重启")
+async def reset_user(message: types.Message):
+    user_id = message.from_user.id
+    user_settings[user_id] = {"currency": "RMB", "rate": 1.0, "fee": 0.0, "commission": 0.0, "records": []}
+    await message.reply("✅ 所有记录已清零")
+
+@dp.message_handler(lambda m: m.text == "需要帮助")
+async def help_link(message: types.Message):
+    await message.reply("加入官方群组获取帮助：https://t.me/yourgroup")
+
+@dp.message_handler(lambda m: m.text == "定制机器人")
+async def custom_bot_link(message: types.Message):
+    await message.reply("联系开发者定制：https://t.me/yourgroup")
+
+@dp.message_handler(lambda m: m.text.replace('+','').replace('.','').isdigit())
+async def handle_transaction(message: types.Message):
     user_id = message.from_user.id
     text = message.text.strip()
-    match = re.match(r'^([+加])\s*(\d+\.?\d*)$', text)
-    if match:
-        name = message.from_user.first_name or '匿名'
-        amount = float(match.group(2))
-    else:
-        name, amt = re.findall(r'(.+)[+加]\s*(\d+\.?\d*)', text)[0]
-        name = name.strip()
-        amount = float(amt)
+    name = message.from_user.first_name
+    try:
+        if '+' in text:
+            if any(c.isalpha() for c in text):
+                for i in range(len(text)):
+                    if text[i] == '+':
+                        name, amt = text[:i], text[i:]
+                        break
+            else:
+                amt = text
+        amount = float(amt.strip('+'))
 
-    currency, rate, fee, commission = get_settings(chat_id, user_id)
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    cursor.execute('''INSERT INTO transactions(chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, date, message_id)
-                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
-                   (chat_id, user_id, name, amount, rate, fee, commission, currency, now, message.message_id))
-    conn.commit()
-    bot.reply_to(message, f"✅ 已入款 +{amount} ({currency})\n编号：{message.message_id}\n" + show_summary(chat_id, user_id))
+        settings = user_settings.get(user_id)
+        if not settings:
+            return await message.reply("请先设置交易参数")
 
-bot.remove_webhook()
-bot.infinity_polling()
+        fee_amt = amount * (1 - settings['fee'] / 100)
+        usdt_amt = round(fee_amt / settings['rate'], 2)
+        comm_amt = round(amount * settings['commission'] / 100, 2) if settings['commission'] > 0 else 0
+        now = datetime.now().strftime("%d-%m-%Y\n%H:%M:%S")
+
+        record = {
+            "amount": amount,
+            "rmb": round(fee_amt, 2),
+            "usdt": usdt_amt,
+            "name": name,
+            "time": now,
+            "comm": comm_amt
+        }
+        settings['records'].append(record)
+
+        response = f"✅ 已入款 +{amount:.1f} ({settings['currency']})\n{now}\n{record['time']} {amount}*{1 - settings['fee']/100:.2f}/{settings['rate']} = {usdt_amt}  {name}"
+        if comm_amt:
+            response += f"\n{record['time']} {amount}*{settings['commission']/100:.1f} = {comm_amt}"
+
+        total_amount = sum(r['amount'] for r in settings['records'])
+        total_usdt = sum(r['usdt'] for r in settings['records'])
+        total_comm = sum(r['comm'] for r in settings['records'])
+
+        response += f"\n\n这里是今天的总数\n已入款（{len(settings['records'])}笔）：{total_amount:.1f} ({settings['currency']})"
+        response += f"\n已下发（0笔）：0 (USDT)"
+        response += f"\n\n总入款金额：{total_amount:.1f} ({settings['currency']})\n汇率：{settings['rate']}"
+        response += f"\n费率：{settings['fee']}%\n佣金：{settings['commission']}%"
+        response += f"\n\n应下发：{fee_amt:.0f}({settings['currency']}) | {usdt_amt} (USDT)"
+        response += f"\n已下发：0.0 ({settings['currency']}) | 0.0 (USDT)"
+        response += f"\n未下发：{fee_amt:.0f}({settings['currency']}) | {usdt_amt} (USDT)"
+        if total_comm:
+            response += f"\n\n中介佣金应下发：{round(total_comm,2)} (USDT)"
+
+        await message.reply(response)
+    except:
+        await message.reply("格式错误，例：+1000 或 张飞+1000")
+
+if __name__ == '__main__':
+    executor.start_polling(dp, skip_updates=True)
