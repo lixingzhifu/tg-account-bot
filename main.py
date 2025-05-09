@@ -95,6 +95,12 @@ def handle_set_command(message):
 
 @bot.message_handler(func=lambda m: m.text and '设置交易指令' in m.text)
 def set_trade_config(message):
+    def set_trade_config(message):
+    print("收到设置交易指令：", message.text)
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    ...
+
     chat_id = message.chat.id
     user_id = message.from_user.id
     text = message.text.replace('：', ':').upper()
