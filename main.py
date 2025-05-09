@@ -88,7 +88,14 @@ def start(message):
 
 @bot.message_handler(func=lambda msg: msg.text == "💱 设置交易")
 def setting(message):
-    bot.send_message(message.chat.id, "格式如下：\n设置货币：RMB\n设置汇率：9\n设置费率：2\n中介佣金：0.5")
+    bot.send_message(
+        message.chat.id,
+        "格式如下：
+设置货币：RMB
+设置汇率：0
+设置费率：0
+中介佣金：0"
+    )
 
 @bot.message_handler(func=lambda msg: msg.text == "📖 指令大全")
 def help_cmds(message):
