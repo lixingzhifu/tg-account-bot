@@ -84,20 +84,31 @@ def handle_start(message):
     reply = "欢迎使用 LX 记账机器人 ✅\n请从下方菜单选择操作："
     bot.send_message(message.chat.id, reply, reply_markup=markup)
 
+@bot.message_handler(func=lambda m: m.text.strip() in ['设置交易', '💱 设置交易'])
+def handle_set_command(message):
+    reply = "格式如下：\n设置货币：RMB\n设置汇率：0\n设置费率：0\n中介佣金：0"
+    bot.reply_to(message, reply)
+
 @bot.message_handler(func=lambda m: m.text.lower().startswith('设置'))
 def set_config(message):
     chat_id = message.chat.id
     text = message.text.replace('：', ':').replace(' ', '').upper()
     currency = rate = fee = commission = None
     for line in text.split('\n'):
+        line = line.strip()
         if '货币' in line:
-            currency = re.findall(r'[A-Z]+', line)[0]
+            match = re.search(r'货币[:：]?(.*)', line)
+            if match: currency = re.sub(r'\W+', '', match.group(1).strip().upper())
         elif '汇率' in line:
-            rate = float(re.search(r'(\d+\.?\d*)', line).group(1))
+            match = re.search(r'汇率[:：]?(.*)', line)
+            if match: rate = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
         elif '费率' in line:
-            fee = float(re.search(r'(\d+\.?\d*)', line).group(1))
+            match = re.search(r'费率[:：]?(.*)', line)
+            if match: fee = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
         elif '佣金' in line:
-            commission = float(re.search(r'(\d+\.?\d*)', line).group(1))
+            match = re.search(r'佣金[:：]?(.*)', line)
+            if match: commission = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
+
     if rate is not None:
         cursor.execute('''
             INSERT INTO settings(chat_id, currency, rate, fee_rate, commission_rate)
@@ -109,7 +120,9 @@ def set_config(message):
             commission_rate = EXCLUDED.commission_rate
         ''', (chat_id, currency or 'RMB', rate, fee or 0, commission or 0))
         conn.commit()
-        bot.reply_to(message, f"设置成功 ✅\n设置货币：{currency or 'RMB'}\n设置汇率：{rate}\n设置费率：{fee or 0}%\n中介佣金：{commission or 0}%")
+        bot.reply_to(message, f"✅ 设置成功\n设置货币：{currency or 'RMB'}\n设置汇率：{rate}\n设置费率：{fee or 0}%\n中介佣金：{commission or 0}%")
+    else:
+        bot.reply_to(message, "⚠️ 设置失败，至少需要提供汇率。例如：\n设置汇率：9")
 
 @bot.message_handler(func=lambda m: re.match(r'^([+加]\s*\d+)|(.+\s*[+加]\s*\d+)', m.text))
 def add_transaction(message):
@@ -131,10 +144,5 @@ def add_transaction(message):
                    (chat_id, name, amount, rate, fee, commission, currency, now))
     conn.commit()
     bot.reply_to(message, f"✅ 已入款 +{amount} ({currency})\n日期\n" + show_summary(chat_id))
-
-@bot.message_handler(func=lambda m: m.text.strip() in ['设置交易', '💱 设置交易'])
-def handle_set_command(message):
-    reply = "格式如下：\n设置货币：RMB\n设置汇率：0\n设置费率：0\n中介佣金：0"
-    bot.reply_to(message, reply)
 
 bot.infinity_polling()
