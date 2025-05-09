@@ -37,11 +37,15 @@ conn.commit()
 
 # === 固定菜单按钮 ===
 def get_reply_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False, row_width=2)
-    markup.add(
-        types.KeyboardButton("▶️ Start"), types.KeyboardButton("💱 设置交易"),
-        types.KeyboardButton("📖 指令大全"), types.KeyboardButton("🔄 计算重启"),
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False)
+    markup.row(
+        types.KeyboardButton("📖 指令大全"), types.KeyboardButton("🔄 计算重启")
+    )
+    markup.row(
         types.KeyboardButton("❓ 需要帮助"), types.KeyboardButton("🛠 定制机器人")
+    )
+    markup.row(
+        types.KeyboardButton("▶️ Start"), types.KeyboardButton("💱 设置交易")
     )
     return markup
 
@@ -78,7 +82,7 @@ def get_summary(user_id):
 中介佣金应下发：{commission:.2f} USDT
 """
 
-@bot.message_handler(commands=['start'])
+@bot.message_handler(func=lambda msg: msg.text in ["/start", "▶️ Start"])
 def start(message):
     bot.send_message(message.chat.id, "欢迎使用TG记账机器人！", reply_markup=get_reply_menu())
 
