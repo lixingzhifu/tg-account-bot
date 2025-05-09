@@ -127,4 +127,9 @@ def add_transaction(message):
     conn.commit()
     bot.reply_to(message, f"✅ 已入款 +{amount} ({currency})\n日期\n" + show_summary(chat_id))
 
+@bot.message_handler(func=lambda m: m.text.strip() in ['设置交易', '💱 设置交易'])
+def handle_set_command(message):
+    reply = "格式如下：\n设置货币：RMB\n设置汇率：0\n设置费率：0\n中介佣金：0"
+    bot.reply_to(message, reply)
+
 bot.infinity_polling()
