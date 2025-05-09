@@ -1,4 +1,3 @@
-from keep_alive import keep_alive
 import telebot
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -6,8 +5,6 @@ from datetime import datetime
 import math
 import re
 import os
-from flask import Flask, request
-from telebot.types import Update
 
 TOKEN = os.getenv('TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -130,20 +127,4 @@ def add_transaction(message):
     conn.commit()
     bot.reply_to(message, f"✅ 已入款 +{amount} ({currency})\n日期\n" + show_summary(chat_id))
 
-app = Flask(__name__)
-
-@app.route('/')
-def index():
-    return "Bot is running."
-
-@app.route(f'/{TOKEN}', methods=['POST'])
-def webhook():
-    update = Update.de_json(request.stream.read().decode("utf-8"))
-    bot.process_new_updates([update])
-    return "ok"
-
-keep_alive()
-
-WEBHOOK_URL = f"https://grateful-fulfillment-production.up.railway.app/{TOKEN}"
-bot.remove_webhook()
-bot.set_webhook(url=WEBHOOK_URL)
+bot.infinity_polling()
