@@ -92,13 +92,13 @@ def handle_set_command(message):
 @bot.message_handler(func=lambda m: m.text.lower().startswith('设置'))
 def set_config(message):
     chat_id = message.chat.id
-    text = message.text.replace('：', ':').replace(' ', '').upper()
+    text = message.text.replace('：', ':').upper()
     currency = rate = fee = commission = None
     for line in text.split('\n'):
-        line = line.strip()
+        line = line.strip().replace(' ', '')
         if '货币' in line:
             match = re.search(r'货币[:：]?(.*)', line)
-            if match: currency = re.sub(r'\W+', '', match.group(1).strip().upper())
+            if match: currency = re.sub(r'[^A-Z]', '', match.group(1).strip().upper())
         elif '汇率' in line:
             match = re.search(r'汇率[:：]?(.*)', line)
             if match: rate = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
