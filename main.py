@@ -53,39 +53,8 @@ def show_summary(chat_id):
     converted_total = ceil2(total * (1 - fee / 100) / rate) if rate else 0
     commission_total_rmb = ceil2(total * commission / 100)
     commission_total_usdt = ceil2(commission_total_rmb / rate) if rate else 0
-    reply = ''
-    today = datetime.now().strftime('%d-%m-%Y')
-    for row in records:
-        t = datetime.strptime(row['date'], '%Y-%m-%d %H:%M:%S').strftime('%H:%M:%S')
-        after_fee = row['amount'] * (1 - row['fee_rate'] / 100)
-        usdt = ceil2(after_fee / row['rate']) if row['rate'] else 0
-        line = f"{t} {row['amount']}*{(1 - row['fee_rate'] / 100):.2f}/{row['rate']} = {usdt}  {row['name']}\n"
-        if row['commission_rate'] > 0:
-            commission_amt = row['amount'] * row['commission_rate'] / 100
-            line += f"{t} {row['amount']}*{row['commission_rate'] / 100} = {ceil2(commission_amt)} 【佣金】\n"
-        reply += line
-    reply += f"\n已入款（{len(records)}笔）：{total} ({currency})\n"
-    reply += f"已下发（0笔）：0.0 (USDT)\n\n"
-    reply += f"总入款金额：{total} ({currency})\n"
-    reply += f"汇率：{rate}\n费率：{fee}%\n佣金：{commission}%\n\n"
-    reply += f"应下发：{ceil2(total * (1 - fee / 100))}({currency}) | {converted_total} (USDT)\n"
-    reply += f"已下发：0.0({currency}) | 0.0 (USDT)\n"
-    reply += f"未下发：{ceil2(total * (1 - fee / 100))}({currency}) | {converted_total} (USDT)\n"
-    if commission > 0:
-        reply += f"\n中介佣金应下发：{commission_total_rmb}({currency}) | {commission_total_usdt} (USDT)"
-    return reply
-
-@bot.message_handler(commands=['start'])
-def handle_start(message):
-    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False)
-    markup.row("设置交易")
-    markup.row("指令大全")
-    markup.row("计算重启")
-    markup.row("汇总")
-    markup.row("需要帮助")
-    markup.row("定制机器人")
     reply = "欢迎使用 LX 记账机器人 ✅
-请从下方菜单选择操作："
+请从下方菜单选择操作：""
     bot.send_message(message.chat.id, reply, reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text.lower().startswith('设置'))
