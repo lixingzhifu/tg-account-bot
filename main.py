@@ -1,4 +1,3 @@
-```python
 import os
 import re
 import math
@@ -81,8 +80,7 @@ def build_summary(chat_id, user_id):
     total_amt = sum(r['amount'] for r in rows)
     currency, rate, fee, commission = get_settings(chat_id, user_id)
     usdt_total = ceil2(total_amt * (1 - fee/100) / rate) if rate else 0.0
-    comm_rmb = ceil2(total_amt * commission/100)
-    comm_usdt = ceil2(comm_rmb / rate) if rate else 0.0
+    comm_usdt = ceil2(total_amt * commission/100 / rate) if rate else 0.0
 
     today = datetime.now().strftime('%d-%m-%Y')
     lines = []
@@ -129,12 +127,12 @@ def show_trade(msg):
 def set_trade(msg):
     chat_id, user_id = msg.chat.id, msg.from_user.id
     text = msg.text
-    curr_m = re.search(r'货币[:：]?\s*([A-Za-z]+)', text)
     rate_m = re.search(r'汇率[:：]?\s*(\d+\.?\d*)', text)
-    fee_m  = re.search(r'费率[:：]?\s*(\d+\.?\d*)', text)
-    com_m  = re.search(r'中介佣金[:：]?\s*(\d+\.?\d*)', text)
     if not rate_m:
         return bot.reply_to(msg, '设置失败\n至少需要提供汇率：设置汇率：9')
+    curr_m = re.search(r'货币[:：]?\s*([A-Za-z]+)', text)
+    fee_m  = re.search(r'费率[:：]?\s*(\d+\.?\d*)', text)
+    com_m  = re.search(r'中介佣金[:：]?\s*(\d+\.?\d*)', text)
     currency = curr_m.group(1) if curr_m else 'RMB'
     rate = float(rate_m.group(1))
     fee_rate = float(fee_m.group(1)) if fee_m else 0.0
@@ -163,7 +161,6 @@ def set_trade(msg):
         f"中介佣金：{commission_rate}%"
     )
 
-# 存款：+金额
 @bot.message_handler(func=lambda m: re.match(r'^\+\d+(?:\.\d+)?$', m.text.strip()))
 def handle_deposit(msg):
     chat_id, user_id = msg.chat.id, msg.from_user.id
@@ -179,7 +176,6 @@ def handle_deposit(msg):
     summary = build_summary(chat_id, user_id)
     bot.reply_to(msg, f"✅ 已入款 +{amt} ({currency})\n{summary}")
 
-# 删除：-金额
 @bot.message_handler(func=lambda m: re.match(r'^-\d+(?:\.\d+)?$', m.text.strip()))
 def handle_withdraw(msg):
     chat_id, user_id = msg.chat.id, msg.from_user.id
@@ -195,13 +191,11 @@ def handle_withdraw(msg):
     else:
         bot.reply_to(msg, f"❌ 未找到 +{amt} 的记录")
 
-# 指令大全
 @bot.message_handler(commands=['commands'])
 def show_commands(msg):
     cmds = [c.command + ' - ' + c.description for c in bot.get_my_commands()]
     bot.reply_to(msg, "可用指令：\n" + "\n".join(cmds))
 
-# 计算重置
 @bot.message_handler(commands=['reset'])
 def handle_reset(msg):
     chat_id, user_id = msg.chat.id, msg.from_user.id
@@ -209,23 +203,18 @@ def handle_reset(msg):
     conn.commit()
     bot.reply_to(msg, "✅ 记录已清空")
 
-# 汇总
 @bot.message_handler(commands=['summary'])
 def handle_summary(msg):
     chat_id, user_id = msg.chat.id, msg.from_user.id
     summary = build_summary(chat_id, user_id)
     bot.reply_to(msg, summary)
 
-# 需要帮助
 @bot.message_handler(commands=['help'])
 def handle_help(msg):
     bot.reply_to(msg, "需要帮助？请加入帮助群：<链接>")
 
-# 定制机器人
 @bot.message_handler(commands=['custom'])
 def handle_custom(msg):
     bot.reply_to(msg, "定制机器人？请联系管理员：<链接>")
 
-# 启动轮询
 bot.infinity_polling()
-```
