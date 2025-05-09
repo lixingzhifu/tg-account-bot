@@ -1,180 +1,64 @@
-```python
+import aiosqlite
 import os
-import re
-import math
-import telebot
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from datetime import datetime
-from telebot.types import BotCommand
 
-# --- 配置 ---
-TOKEN = os.getenv('TOKEN')
-DATABASE_URL = os.getenv('DATABASE_URL')
+DB_PATH = os.getenv("DATABASE_PATH", "bot.db")
 
-# --- 初始化 ---
-bot = telebot.TeleBot(TOKEN)
-# 固定命令菜单
-bot.set_my_commands([
-    BotCommand('start', '启动机器人'),
-    BotCommand('trade', '设置交易'),
-    BotCommand('commands', '指令大全'),
-    BotCommand('reset', '计算重启'),
-    BotCommand('summary', '汇总'),
-    BotCommand('help', '需要帮助'),
-    BotCommand('custom', '定制机器人'),
-])
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                user_id INTEGER PRIMARY KEY,
+                currency TEXT DEFAULT 'RMB',
+                rate REAL DEFAULT 9.0,
+                fee REAL DEFAULT 2.0,
+                commission REAL DEFAULT 0.5
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                name TEXT,
+                amount REAL,
+                fee_amount REAL,
+                usdt REAL,
+                comm REAL,
+                date TEXT
+            )
+        """)
+        await db.commit()
 
-# 数据库连接
-conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-cursor = conn.cursor()
-# 自动迁移：给 transactions 表添加 user_id 列
-cursor.execute(
-    "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS user_id BIGINT"
-)
-conn.commit()
+async def get_settings(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT currency, rate, fee, commission FROM settings WHERE user_id = ?", (user_id,))
+        row = await cursor.fetchone()
+        if row:
+            return dict(currency=row[0], rate=row[1], fee=row[2], commission=row[3])
+        else:
+            await db.execute("INSERT INTO settings(user_id) VALUES (?)", (user_id,))
+            await db.commit()
+            return dict(currency='RMB', rate=9.0, fee=2.0, commission=0.5)
 
-# --- 建表 ---
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS settings (
-    chat_id BIGINT,
-    user_id BIGINT,
-    currency TEXT DEFAULT 'RMB',
-    rate DOUBLE PRECISION DEFAULT 0,
-    fee_rate DOUBLE PRECISION DEFAULT 0,
-    commission_rate DOUBLE PRECISION DEFAULT 0,
-    PRIMARY KEY (chat_id, user_id)
-)''')
+async def update_setting(user_id, key, value):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE settings SET {key} = ? WHERE user_id = ?", (value, user_id))
+        await db.commit()
 
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS transactions (
-    id SERIAL PRIMARY KEY,
-    chat_id BIGINT,
-    user_id BIGINT,
-    name TEXT,
-    amount DOUBLE PRECISION,
-    rate DOUBLE PRECISION,
-    fee_rate DOUBLE PRECISION,
-    commission_rate DOUBLE PRECISION,
-    currency TEXT,
-    date TIMESTAMP
-)''')
-conn.commit()
+async def add_record(user_id, amount, fee_amount, usdt, comm, name, date):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO transactions(user_id, amount, fee_amount, usdt, comm, name, date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, amount, fee_amount, usdt, comm, name, date))
+        await db.commit()
 
-# --- 辅助函数 ---
-def ceil2(x):
-    return math.ceil(x * 100) / 100.0
+async def get_records(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT amount, fee_amount, usdt, comm, name, date FROM transactions WHERE user_id = ?", (user_id,))
+        rows = await cursor.fetchall()
+        return [dict(amount=r[0], fee=r[1], usdt=r[2], comm=r[3], name=r[4], date=r[5]) for r in rows]
 
-# 获取用户设置
-def get_settings(chat_id, user_id):
-    cursor.execute(
-        'SELECT currency, rate, fee_rate, commission_rate FROM settings WHERE chat_id=%s AND user_id=%s',
-        (chat_id, user_id)
-    )
-    row = cursor.fetchone()
-    return (row['currency'], row['rate'], row['fee_rate'], row['commission_rate']) if row else ('RMB', 0.0, 0.0, 0.0)
-
-# 生成汇总文本
-def build_summary(chat_id, user_id):
-    cursor.execute(
-        'SELECT id, name, amount, rate, fee_rate, commission_rate, date FROM transactions WHERE chat_id=%s AND user_id=%s',
-        (chat_id, user_id)
-    )
-    rows = cursor.fetchall()
-    total_amt = sum(r['amount'] for r in rows)
-    currency, rate, fee, commission = get_settings(chat_id, user_id)
-    usdt_total = ceil2(total_amt * (1 - fee/100) / rate) if rate else 0.0
-    comm_rmb = ceil2(total_amt * commission/100)
-    comm_usdt = ceil2(comm_rmb / rate) if rate else 0.0
-
-    today = datetime.now().strftime('%d-%m-%Y')
-    lines = []
-    for r in rows:
-        t = r['date'].strftime('%H:%M:%S')
-        after_fee = r['amount'] * (1 - r['fee_rate']/100)
-        usdt = ceil2(after_fee / r['rate']) if r['rate'] else 0.0
-        line = f"{t} {r['amount']}*{(1-r['fee_rate']/100):.2f}/{r['rate']} = {usdt}  {r['name']}"
-        if r['commission_rate'] > 0:
-            com_amt = ceil2(r['amount'] * r['commission_rate']/100)
-            line += f"\n{t} {r['amount']}*{r['commission_rate']/100} = {com_amt} 【佣金】"
-        lines.append(line)
-
-    footer = (
-        f"已入款（{len(rows)}笔）：{total_amt} ({currency})\n"
-        f"已下发（0笔）：0 (USDT)\n\n"
-        f"总入款金额：{total_amt} ({currency})\n"
-        f"汇率：{rate}\n费率：{fee}%\n佣金：{commission}%\n\n"
-        f"应下发：{ceil2(total_amt*(1-fee/100))}({currency}) | {usdt_total} (USDT)\n"
-        f"已下发：0.0({currency}) | 0.0 (USDT)\n"
-        f"未下发：{ceil2(total_amt*(1-fee/100))}({currency}) | {usdt_total} (USDT)\n"
-    )
-    if commission > 0:
-        footer += f"\n中介佣金应下发：{comm_usdt} (USDT)"
-
-    return f"订单号：{today}\n" + "\n".join(lines) + "\n" + footer
-
-# --- 处理器 ---
-@bot.message_handler(commands=['start'])
-def handle_start(msg):
-    bot.reply_to(msg, "欢迎使用 LX 记账机器人 ✅\n请输入 /trade 来设置交易参数或使用侧边菜单。")
-
-@bot.message_handler(commands=['trade'])
-def show_trade(msg):
-    c, r, f, cm = get_settings(msg.chat.id, msg.from_user.id)
-    text = (
-        f"设置交易指令\n"
-        f"设置货币：{c}\n"
-        f"设置汇率：{r}\n"
-        f"设置费率：{f}\n"
-        f"中介佣金：{cm}"
-    )
-    bot.reply_to(msg, text)
-
-@bot.message_handler(func=lambda m: m.text and m.text.startswith('设置交易指令'))
-def set_trade(msg):
-    chat_id, user_id = msg.chat.id, msg.from_user.id
-    text = msg.text
-    curr_m = re.search(r'货币[:：]?\s*([A-Za-z]+)', text)
-    rate_m = re.search(r'汇率[:：]?\s*(\d+\.?\d*)', text)
-    fee_m  = re.search(r'费率[:：]?\s*(\d+\.?\d*)', text)
-    com_m  = re.search(r'中介佣金[:：]?\s*(\d+\.?\d*)', text)
-    if not rate_m:
-        return bot.reply_to(msg, '设置失败\n至少需要提供汇率：设置汇率：9')
-    currency = curr_m.group(1) if curr_m else 'RMB'
-    rate = float(rate_m.group(1))
-    fee_rate = float(fee_m.group(1)) if fee_m else 0.0
-    commission_rate = float(com_m.group(1)) if com_m else 0.0
-
-    cursor.execute(
-        'SELECT 1 FROM settings WHERE chat_id=%s AND user_id=%s',
-        (chat_id, user_id)
-    )
-    if cursor.fetchone():
-        cursor.execute(
-            'UPDATE settings SET currency=%s, rate=%s, fee_rate=%s, commission_rate=%s WHERE chat_id=%s AND user_id=%s',
-            (currency, rate, fee_rate, commission_rate, chat_id, user_id)
-        )
-    else:
-        cursor.execute(
-            'INSERT INTO settings(chat_id, user_id, currency, rate, fee_rate, commission_rate) VALUES(%s, %s, %s, %s, %s, %s)',
-            (chat_id, user_id, currency, rate, fee_rate, commission_rate)
-        )
-    conn.commit()
-    bot.reply_to(msg,
-        f"✅ 设置成功\n"
-        f"设置货币：{currency}\n"
-        f"设置汇率：{rate}\n"
-        f"设置费率：{fee_rate}%\n"
-        f"中介佣金：{commission_rate}%"
-    )
-
-# 存款处理: +金额
-@bot.message_handler(func=lambda m: re.match(r'^\+\d+(?:\.\d+)?$', m.text.strip()))
-def deposit(msg):
-    chat_id, user_id = msg.chat.id, msg.from_user.id
-    amt = float(msg.text.lstrip('+'))
-    name = msg.from_user.username or msg.from_user.first_name or '匿名'
-    currency, rate, fee_rate, commission_rate = get_settings(chat_id, user_id)
-    now = datetime.now()
-    cursor.execute(
-        'INSERT INTO transactions(chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, date) VALUES(%s, %s, %s, %s, %s, %s, %s, %
+async def reset_user_data(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM transactions WHERE user_id = ?", (user_id,))
+        await db.commit()
