@@ -93,7 +93,7 @@ def handle_set_command(message):
     reply = "设置交易指令\n设置货币：RMB\n设置汇率：0\n设置费率：0\n中介佣金：0"
     bot.reply_to(message, reply)
 
-@bot.message_handler(func=lambda m: m.text.startswith('设置交易指令'))
+@bot.message_handler(func=lambda m: m.text and '设置交易指令' in m.text)
 def set_trade_config(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
