@@ -82,7 +82,7 @@ def handle_start(message):
 @bot.message_handler(func=lambda m: m.text.lower().startswith('设置'))
 def set_config(message):
     chat_id = message.chat.id
-    text = message.text.replace('：', ':').upper()
+    text = message.text.replace('：', ':').replace(' ', '').upper()
     currency = rate = fee = commission = None
     for line in text.split('\n'):
         if '货币' in line:
