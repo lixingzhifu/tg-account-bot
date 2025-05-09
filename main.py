@@ -1,3 +1,4 @@
+```python
 import os
 import re
 import math
@@ -27,8 +28,10 @@ bot.set_my_commands([
 # 数据库连接
 conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 cursor = conn.cursor()
-# 自动迁移：新增 user_id 列以兼容旧表结构
-cursor.execute("ALTER TABLE IF EXISTS transactions ADD COLUMN IF NOT EXISTS user_id BIGINT;")
+# 自动迁移：给 transactions 表添加 user_id 列
+cursor.execute(
+    "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS user_id BIGINT"
+)
 conn.commit()
 
 # --- 建表 ---
@@ -62,8 +65,8 @@ conn.commit()
 def ceil2(x):
     return math.ceil(x * 100) / 100.0
 
-# 获取设置
- def get_settings(chat_id, user_id):
+# 获取用户设置
+def get_settings(chat_id, user_id):
     cursor.execute(
         'SELECT currency, rate, fee_rate, commission_rate FROM settings WHERE chat_id=%s AND user_id=%s',
         (chat_id, user_id)
@@ -71,7 +74,7 @@ def ceil2(x):
     row = cursor.fetchone()
     return (row['currency'], row['rate'], row['fee_rate'], row['commission_rate']) if row else ('RMB', 0.0, 0.0, 0.0)
 
-# 生成用户今日汇总
+# 生成汇总文本
 def build_summary(chat_id, user_id):
     cursor.execute(
         'SELECT id, name, amount, rate, fee_rate, commission_rate, date FROM transactions WHERE chat_id=%s AND user_id=%s',
@@ -142,7 +145,10 @@ def set_trade(msg):
     fee_rate = float(fee_m.group(1)) if fee_m else 0.0
     commission_rate = float(com_m.group(1)) if com_m else 0.0
 
-    cursor.execute('SELECT 1 FROM settings WHERE chat_id=%s AND user_id=%s', (chat_id, user_id))
+    cursor.execute(
+        'SELECT 1 FROM settings WHERE chat_id=%s AND user_id=%s',
+        (chat_id, user_id)
+    )
     if cursor.fetchone():
         cursor.execute(
             'UPDATE settings SET currency=%s, rate=%s, fee_rate=%s, commission_rate=%s WHERE chat_id=%s AND user_id=%s',
@@ -158,11 +164,11 @@ def set_trade(msg):
         f"✅ 设置成功\n"
         f"设置货币：{currency}\n"
         f"设置汇率：{rate}\n"
-        f"设置费率：{fee_rate}\n"
-        f"中介佣金：{commission_rate}"
+        f"设置费率：{fee_rate}%\n"
+        f"中介佣金：{commission_rate}%"
     )
 
-# 存款处理
+# 存款处理: +金额
 @bot.message_handler(func=lambda m: re.match(r'^\+\d+(?:\.\d+)?$', m.text.strip()))
 def deposit(msg):
     chat_id, user_id = msg.chat.id, msg.from_user.id
@@ -171,30 +177,4 @@ def deposit(msg):
     currency, rate, fee_rate, commission_rate = get_settings(chat_id, user_id)
     now = datetime.now()
     cursor.execute(
-        'INSERT INTO transactions(chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, date) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s)',
-        (chat_id, user_id, name, amt, rate, fee_rate, commission_rate, currency, now)
-    )
-    conn.commit()
-    summary = build_summary(chat_id, user_id)
-    bot.reply_to(msg, f"✅ 已入款 +{ceil2(amt)} ({currency})\n日期\n{summary}")
-
-# 删除处理
-@bot.message_handler(func=lambda m: re.match(r'^-\d+(?:\.\d+)?$', m.text.strip()))
-def withdraw(msg):
-    chat_id, user_id = msg.chat.id, msg.from_user.id
-    amt = float(msg.text.lstrip('-'))
-    cursor.execute(
-        'SELECT id FROM transactions WHERE chat_id=%s AND user_id=%s AND amount=%s ORDER BY date DESC LIMIT 1',
-        (chat_id, user_id, amt)
-    )
-    row = cursor.fetchone()
-    if not row:
-        return bot.reply_to(msg, f"删除失败，没有找到金额 {amt} 的记录。")
-    cursor.execute('DELETE FROM transactions WHERE id=%s', (row['id'],))
-    conn.commit()
-    currency, *_ = get_settings(chat_id, user_id)
-    summary = build_summary(chat_id, user_id)
-    bot.reply_to(msg, f"✅ 已删除 -{ceil2(amt)} ({currency})\n日期\n{summary}")
-
-if __name__ == '__main__':
-    bot.infinity_polling(timeout=60)
+        'INSERT INTO transactions(chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, date) VALUES(%s, %s, %s, %s, %s, %s, %s, %
