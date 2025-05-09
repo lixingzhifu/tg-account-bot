@@ -55,14 +55,14 @@ def show_summary(chat_id):
     commission_total_usdt = ceil2(commission_total_rmb / rate) if rate else 0
     reply = ''
     today = datetime.now().strftime('%d-%m-%Y')
-    for row in records:
+    for i, row in enumerate(records, 1):
         t = datetime.strptime(row['date'], '%Y-%m-%d %H:%M:%S').strftime('%H:%M:%S')
         after_fee = row['amount'] * (1 - row['fee_rate'] / 100)
         usdt = ceil2(after_fee / row['rate']) if row['rate'] else 0
-        line = f"{t} {row['amount']}*{(1 - row['fee_rate'] / 100):.2f}/{row['rate']} = {usdt}  {row['name']}\n"
+        line = f"{i}. {t} {row['amount']}*{(1 - row['fee_rate'] / 100):.2f}/{row['rate']} = {usdt}  {row['name']}\n"
         if row['commission_rate'] > 0:
             commission_amt = row['amount'] * row['commission_rate'] / 100
-            line += f"{t} {row['amount']}*{row['commission_rate'] / 100} = {ceil2(commission_amt)} 【佣金】\n"
+            line += f"{i}. {t} {row['amount']}*{row['commission_rate'] / 100} = {ceil2(commission_amt)} 【佣金】\n"
         reply += line
     reply += f"\n已入款（{len(records)}笔）：{total} ({currency})\n"
     reply += f"已下发（0笔）：0.0 (USDT)\n\n"
@@ -161,6 +161,6 @@ def add_transaction(message):
                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
                    (chat_id, name, amount, rate, fee, commission, currency, now))
     conn.commit()
-    bot.reply_to(message, f"✅ 已入款 +{amount} ({currency})\n日期\n" + show_summary(chat_id))
+    bot.reply_to(message, f"✅ 已入款 +{amount} ({currency})\n编号：{message.message_id}\n" + show_summary(chat_id))
 
 bot.infinity_polling()
