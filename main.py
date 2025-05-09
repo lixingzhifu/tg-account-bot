@@ -27,6 +27,9 @@ bot.set_my_commands([
 # 数据库连接
 conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 cursor = conn.cursor()
+# 自动迁移：新增 user_id 列以兼容旧表结构
+cursor.execute("ALTER TABLE IF EXISTS transactions ADD COLUMN IF NOT EXISTS user_id BIGINT;")
+conn.commit()
 
 # --- 建表 ---
 cursor.execute('''
@@ -60,7 +63,7 @@ def ceil2(x):
     return math.ceil(x * 100) / 100.0
 
 # 获取设置
-def get_settings(chat_id, user_id):
+ def get_settings(chat_id, user_id):
     cursor.execute(
         'SELECT currency, rate, fee_rate, commission_rate FROM settings WHERE chat_id=%s AND user_id=%s',
         (chat_id, user_id)
