@@ -86,43 +86,61 @@ def handle_start(message):
 
 @bot.message_handler(func=lambda m: m.text.strip() in ['设置交易', '💱 设置交易'])
 def handle_set_command(message):
-    reply = "格式如下：\n设置货币：RMB\n设置汇率：0\n设置费率：0\n中介佣金：0"
+    reply = "设置交易指令\n设置货币：RMB\n设置汇率：0\n设置费率：0\n中介佣金：0"
     bot.reply_to(message, reply)
 
-@bot.message_handler(func=lambda m: m.text.lower().startswith('设置'))
-def set_config(message):
+@bot.message_handler(func=lambda m: m.text.startswith('设置交易指令'))
+def set_trade_config(message):
     chat_id = message.chat.id
     text = message.text.replace('：', ':').upper()
+
     currency = rate = fee = commission = None
+    errors = []
+
     for line in text.split('\n'):
         line = line.strip().replace(' ', '')
         if '货币' in line:
             match = re.search(r'货币[:：]?(.*)', line)
-            if match: currency = re.sub(r'[^A-Z]', '', match.group(1).strip().upper())
+            if match:
+                currency = re.sub(r'[^A-Z]', '', match.group(1).strip().upper())
         elif '汇率' in line:
             match = re.search(r'汇率[:：]?(.*)', line)
-            if match: rate = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
+            if match:
+                try:
+                    rate = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
+                except:
+                    errors.append("汇率格式错误")
         elif '费率' in line:
             match = re.search(r'费率[:：]?(.*)', line)
-            if match: fee = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
+            if match:
+                try:
+                    fee = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
+                except:
+                    errors.append("费率格式错误")
         elif '佣金' in line:
             match = re.search(r'佣金[:：]?(.*)', line)
-            if match: commission = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
+            if match:
+                try:
+                    commission = float(re.findall(r'\d+\.?\d*', match.group(1))[0])
+                except:
+                    errors.append("中介佣金请设置数字")
 
-    if rate is not None:
+    if errors:
+        bot.reply_to(message, "设置错误\n" + '\n'.join(errors))
+    elif rate is not None:
         cursor.execute('''
             INSERT INTO settings(chat_id, currency, rate, fee_rate, commission_rate)
             VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (chat_id) DO UPDATE SET
-            currency = EXCLUDED.currency,
-            rate = EXCLUDED.rate,
-            fee_rate = EXCLUDED.fee_rate,
-            commission_rate = EXCLUDED.commission_rate
+                currency = EXCLUDED.currency,
+                rate = EXCLUDED.rate,
+                fee_rate = EXCLUDED.fee_rate,
+                commission_rate = EXCLUDED.commission_rate
         ''', (chat_id, currency or 'RMB', rate, fee or 0, commission or 0))
         conn.commit()
         bot.reply_to(message, f"✅ 设置成功\n设置货币：{currency or 'RMB'}\n设置汇率：{rate}\n设置费率：{fee or 0}%\n中介佣金：{commission or 0}%")
     else:
-        bot.reply_to(message, "⚠️ 设置失败，至少需要提供汇率。例如：\n设置汇率：9")
+        bot.reply_to(message, "设置错误，缺少汇率，请至少设置汇率")
 
 @bot.message_handler(func=lambda m: re.match(r'^([+加]\s*\d+)|(.+\s*[+加]\s*\d+)', m.text))
 def add_transaction(message):
