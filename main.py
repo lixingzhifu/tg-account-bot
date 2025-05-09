@@ -39,6 +39,20 @@ CREATE TABLE IF NOT EXISTS settings (
     commission_rate DOUBLE PRECISION DEFAULT 0,
     PRIMARY KEY (chat_id, user_id)
 )''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS transactions (
+    id SERIAL PRIMARY KEY,
+    chat_id BIGINT,
+    user_id BIGINT,
+    name TEXT,
+    amount DOUBLE PRECISION,
+    rate DOUBLE PRECISION,
+    fee_rate DOUBLE PRECISION,
+    commission_rate DOUBLE PRECISION,
+    currency TEXT,
+    date TIMESTAMP
+)''')
 conn.commit()
 
 # --- 辅助函数 ---
@@ -68,13 +82,13 @@ def handle_trade_menu(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
     currency, rate, fee, commission = get_settings(chat_id, user_id)
+    # 仅显示指令模板，不要“格式如下”前缀
     text = (
-        f"格式如下：\n"
         f"设置交易指令\n"
         f"设置货币：{currency}\n"
         f"设置汇率：{rate}\n"
         f"设置费率：{fee}\n"
-        f"中介佣金：{commission}\n"
+        f"中介佣金：{commission}"
     )
     bot.reply_to(message, text)
 
@@ -109,25 +123,21 @@ def set_trade_config(message):
     # 必填检查
     if params['rate'] is None:
         return bot.reply_to(message, '设置失败\n至少需要提供汇率，例如：设置汇率：9')
-    # upsert 手动执行，避免冲突
+    # upsert
     cursor.execute(
         'SELECT 1 FROM settings WHERE chat_id=%s AND user_id=%s',
         (chat_id, user_id)
     )
-    exists = cursor.fetchone()
-    if exists:
+    if cursor.fetchone():
         cursor.execute(
-            '''UPDATE settings SET currency=%s, rate=%s, fee_rate=%s, commission_rate=%s
-               WHERE chat_id=%s AND user_id=%s''',
+            'UPDATE settings SET currency=%s, rate=%s, fee_rate=%s, commission_rate=%s WHERE chat_id=%s AND user_id=%s',
             (params['currency'] or 'RMB', params['rate'], params['fee_rate'] or 0,
              params['commission_rate'] or 0, chat_id, user_id)
         )
     else:
         cursor.execute(
-            '''INSERT INTO settings (chat_id, user_id, currency, rate, fee_rate, commission_rate)
-               VALUES (%s, %s, %s, %s, %s, %s)''',
-            (chat_id, user_id, params['currency'] or 'RMB', params['rate'],
-             params['fee_rate'] or 0, params['commission_rate'] or 0)
+            'INSERT INTO settings(chat_id, user_id, currency, rate, fee_rate, commission_rate) VALUES(%s,%s,%s,%s,%s,%s)',
+            (chat_id, user_id, params['currency'] or 'RMB', params['rate'], params['fee_rate'] or 0, params['commission_rate'] or 0)
         )
     conn.commit()
     bot.reply_to(
@@ -139,7 +149,21 @@ def set_trade_config(message):
         f"中介佣金：{params['commission_rate']}"
     )
 
-# 其他命令可按需添加 …
+# +1000 入款处理
+@bot.message_handler(func=lambda m: re.match(r'^\+\d+(\.\d+)?$', m.text.strip()))
+def handle_deposit(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    amount = float(message.text.lstrip('+'))
+    name = message.from_user.first_name or '匿名'
+    currency, rate, fee, commission = get_settings(chat_id, user_id)
+    now = datetime.now()
+    cursor.execute(
+        'INSERT INTO transactions(chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, date) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+        (chat_id, user_id, name, amount, rate, fee, commission, currency, now)
+    )
+    conn.commit()
+    bot.reply_to(message, f"✅ 已入款 +{amount} ({currency})")
 
 if __name__ == '__main__':
     bot.infinity_polling(timeout=60)
