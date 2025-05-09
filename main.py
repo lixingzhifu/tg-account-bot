@@ -77,20 +77,16 @@ def show_summary(chat_id):
 
 @bot.message_handler(commands=['start'])
 def handle_start(message):
-    reply = """
-欢迎使用 LX 记账机器人 ✅
-
-可用指令如下：
-
-/start - 重新启动机器人
-设置交易 - 设置货币、汇率、费率、佣金
-指令大全 - 查看所有支持的指令
-计算重启 - 清空当日入账记录
-汇总 - 查看用户订单汇总（管理员可查所有人）
-需要帮助 - 加入帮助群组
-定制机器人 - 联系开发者定制功能
-"""
-    bot.reply_to(message, reply)
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False)
+    markup.row("设置交易")
+    markup.row("指令大全")
+    markup.row("计算重启")
+    markup.row("汇总")
+    markup.row("需要帮助")
+    markup.row("定制机器人")
+    reply = "欢迎使用 LX 记账机器人 ✅
+请从下方菜单选择操作："
+    bot.send_message(message.chat.id, reply, reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text.lower().startswith('设置'))
 def set_config(message):
