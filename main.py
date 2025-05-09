@@ -1,3 +1,4 @@
+from keep_alive import keep_alive
 import telebot
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -5,8 +6,10 @@ from datetime import datetime
 import math
 import re
 import os
+from flask import Flask, request
+from telebot.types import Update
 
-TOKEN = os.getenv('TOKEN')
+TOKEN = os.getenv('TOKEN')  # 确保环境变量已设为完整 Bot Token
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 bot = telebot.TeleBot(TOKEN)
@@ -53,26 +56,15 @@ def show_summary(chat_id):
     converted_total = ceil2(total * (1 - fee / 100) / rate) if rate else 0
     commission_total_rmb = ceil2(total * commission / 100)
     commission_total_usdt = ceil2(commission_total_rmb / rate) if rate else 0
-    reply = ''
-    today = datetime.now().strftime('%d-%m-%Y')
-    for row in records:
-        t = datetime.strptime(row['date'], '%Y-%m-%d %H:%M:%S').strftime('%H:%M:%S')
-        after_fee = row['amount'] * (1 - row['fee_rate'] / 100)
-        usdt = ceil2(after_fee / row['rate']) if row['rate'] else 0
-        line = f"{t} {row['amount']}*{(1 - row['fee_rate'] / 100):.2f}/{row['rate']} = {usdt}  {row['name']}\n"
-        if row['commission_rate'] > 0:
-            commission_amt = row['amount'] * row['commission_rate'] / 100
-            line += f"{t} {row['amount']}*{row['commission_rate'] / 100} = {ceil2(commission_amt)} 【佣金】\n"
-        reply += line
-    reply += f"\n已入款（{len(records)}笔）：{total} ({currency})\n"
-    reply += f"已下发（0笔）：0.0 (USDT)\n\n"
-    reply += f"总入款金额：{total} ({currency})\n"
-    reply += f"汇率：{rate}\n费率：{fee}%\n佣金：{commission}%\n\n"
-    reply += f"应下发：{ceil2(total * (1 - fee / 100))}({currency}) | {converted_total} (USDT)\n"
-    reply += f"已下发：0.0({currency}) | 0.0 (USDT)\n"
-    reply += f"未下发：{ceil2(total * (1 - fee / 100))}({currency}) | {converted_total} (USDT)\n"
+    reply = f"\n已入款（{len(records)}笔）：{total} ({currency})"
+    reply += f"\n已下发（0笔）：0.0 (USDT)\n"
+    reply += f"\n总入款金额：{total} ({currency})"
+    reply += f"\n汇率：{rate}\n费率：{fee}%\n佣金：{commission}%\n"
+    reply += f"\n应下发：{ceil2(total * (1 - fee / 100))}({currency}) | {converted_total} (USDT)"
+    reply += f"\n已下发：0.0({currency}) | 0.0 (USDT)"
+    reply += f"\n未下发：{ceil2(total * (1 - fee / 100))}({currency}) | {converted_total} (USDT)"
     if commission > 0:
-        reply += f"\n中介佣金应下发：{commission_total_rmb}({currency}) | {commission_total_usdt} (USDT)"
+        reply += f"\n\n中介佣金应下发：{commission_total_rmb}({currency}) | {commission_total_usdt} (USDT)"
     return reply
 
 @bot.message_handler(commands=['start'])
@@ -104,21 +96,14 @@ def set_config(message):
             commission_rate = EXCLUDED.commission_rate
         ''', (chat_id, currency or 'RMB', rate, fee or 0, commission or 0))
         conn.commit()
-        bot.reply_to(message, f"设置成功 ✅\n设置货币：{currency or 'RMB'}\n设置汇率：{rate}\n设置费率：{fee or 0}%\n中介佣金：{commission or 0}%")
+        bot.reply_to(message, f"设置成功\n固定汇率：{rate}\n固定费率：{fee}%\n中介佣金：{commission}%")
 
-@bot.message_handler(func=lambda m: re.match(r'^([+加]\s*\d+)|(.+\s*[+加]\s*\d+)', m.text))
+@bot.message_handler(func=lambda m: re.match(r'^[+加]\s*\d+', m.text.strip()))
 def add_transaction(message):
     chat_id = message.chat.id
     text = message.text.strip()
-    match = re.match(r'^([+加])\s*(\d+\.?\d*)$', text)
-    if match:
-        name = message.from_user.first_name or '匿名'
-        amount = float(match.group(2))
-    else:
-        name, amt = re.findall(r'(.+)[+加]\s*(\d+\.?\d*)', text)[0]
-        name = name.strip()
-        amount = float(amt)
-
+    amount = float(re.findall(r'\d+\.?\d*', text)[0])
+    name = message.from_user.first_name or '匿名'
     currency, rate, fee, commission = get_settings(chat_id)
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute('''INSERT INTO transactions(chat_id, name, amount, rate, fee_rate, commission_rate, currency, date)
@@ -127,9 +112,22 @@ def add_transaction(message):
     conn.commit()
     bot.reply_to(message, f"✅ 已入款 +{amount} ({currency})\n日期\n" + show_summary(chat_id))
 
-@bot.message_handler(func=lambda m: m.text.strip() in ['设置交易', '💱 设置交易'])
-def handle_set_command(message):
-    reply = "格式如下：\n设置货币：RMB\n设置汇率：0\n设置费率：0\n中介佣金：0"
-    bot.reply_to(message, reply)
+# Flask & Webhook
+app = Flask(__name__)
 
-bot.infinity_polling()
+@app.route('/')
+def index():
+    return "Bot is running."
+
+@app.route(f'/{TOKEN}', methods=['POST'])
+def webhook():
+    update = Update.de_json(request.stream.read().decode("utf-8"))
+    bot.process_new_updates([update])
+    return "ok"
+
+# 启动保活服务 + 设置Webhook
+keep_alive()
+
+WEBHOOK_URL = f"https://grateful-fulfillment-production.up.railway.app/{TOKEN}"
+bot.remove_webhook()
+bot.set_webhook(url=WEBHOOK_URL)
