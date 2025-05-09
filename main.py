@@ -68,44 +68,44 @@ def get_settings(chat_id, user_id):
     row = cursor.fetchone()
     return (row['currency'], row['rate'], row['fee_rate'], row['commission_rate']) if row else ('RMB', 0.0, 0.0, 0.0)
 
-# 生成汇总
+# 生成用户今日汇总
 def build_summary(chat_id, user_id):
     cursor.execute(
-        'SELECT name, amount, rate, fee_rate, commission_rate, date FROM transactions WHERE chat_id=%s AND user_id=%s',
+        'SELECT id, name, amount, rate, fee_rate, commission_rate, date FROM transactions WHERE chat_id=%s AND user_id=%s',
         (chat_id, user_id)
     )
     rows = cursor.fetchall()
     total_amt = sum(r['amount'] for r in rows)
     currency, rate, fee, commission = get_settings(chat_id, user_id)
-    converted = ceil2(total_amt * (1 - fee/100) / rate) if rate else 0.0
+    usdt_total = ceil2(total_amt * (1 - fee/100) / rate) if rate else 0.0
     comm_rmb = ceil2(total_amt * commission/100)
     comm_usdt = ceil2(comm_rmb / rate) if rate else 0.0
 
+    today = datetime.now().strftime('%d-%m-%Y')
     lines = []
     for r in rows:
         t = r['date'].strftime('%H:%M:%S')
         after_fee = r['amount'] * (1 - r['fee_rate']/100)
         usdt = ceil2(after_fee / r['rate']) if r['rate'] else 0.0
-        line = f"{t} {r['amount']}*{1-r['fee_rate']/100:.2f}/{r['rate']} = {usdt}  {r['name']}"
+        line = f"{t} {r['amount']}*{(1-r['fee_rate']/100):.2f}/{r['rate']} = {usdt}  {r['name']}"
         if r['commission_rate'] > 0:
             com_amt = ceil2(r['amount'] * r['commission_rate']/100)
             line += f"\n{t} {r['amount']}*{r['commission_rate']/100} = {com_amt} 【佣金】"
         lines.append(line)
-    today = datetime.now().strftime('%d-%m-%Y')
-    header = f"订单号：{today}"
+
     footer = (
-        f"这里是今天的总数\n"
         f"已入款（{len(rows)}笔）：{total_amt} ({currency})\n"
         f"已下发（0笔）：0 (USDT)\n\n"
         f"总入款金额：{total_amt} ({currency})\n"
         f"汇率：{rate}\n费率：{fee}%\n佣金：{commission}%\n\n"
-        f"应下发：{ceil2(total_amt*(1-fee/100))}({currency}) | {converted} (USDT)\n"
+        f"应下发：{ceil2(total_amt*(1-fee/100))}({currency}) | {usdt_total} (USDT)\n"
         f"已下发：0.0({currency}) | 0.0 (USDT)\n"
-        f"未下发：{ceil2(total_amt*(1-fee/100))}({currency}) | {converted} (USDT)\n"
+        f"未下发：{ceil2(total_amt*(1-fee/100))}({currency}) | {usdt_total} (USDT)\n"
     )
     if commission > 0:
         footer += f"\n中介佣金应下发：{comm_usdt} (USDT)"
-    return header + '\n'.join([''] + lines) + '\n' + footer
+
+    return f"订单号：{today}\n" + "\n".join(lines) + "\n" + footer
 
 # --- 处理器 ---
 @bot.message_handler(commands=['start'])
@@ -128,18 +128,17 @@ def show_trade(msg):
 def set_trade(msg):
     chat_id, user_id = msg.chat.id, msg.from_user.id
     text = msg.text
-    # 全文匹配参数
     curr_m = re.search(r'货币[:：]?\s*([A-Za-z]+)', text)
     rate_m = re.search(r'汇率[:：]?\s*(\d+\.?\d*)', text)
-    fee_m = re.search(r'费率[:：]?\s*(\d+\.?\d*)', text)
-    com_m = re.search(r'中介佣金[:：]?\s*(\d+\.?\d*)', text)
+    fee_m  = re.search(r'费率[:：]?\s*(\d+\.?\d*)', text)
+    com_m  = re.search(r'中介佣金[:：]?\s*(\d+\.?\d*)', text)
     if not rate_m:
         return bot.reply_to(msg, '设置失败\n至少需要提供汇率：设置汇率：9')
     currency = curr_m.group(1) if curr_m else 'RMB'
     rate = float(rate_m.group(1))
     fee_rate = float(fee_m.group(1)) if fee_m else 0.0
     commission_rate = float(com_m.group(1)) if com_m else 0.0
-    # 写入数据库
+
     cursor.execute('SELECT 1 FROM settings WHERE chat_id=%s AND user_id=%s', (chat_id, user_id))
     if cursor.fetchone():
         cursor.execute(
@@ -160,7 +159,8 @@ def set_trade(msg):
         f"中介佣金：{commission_rate}"
     )
 
-@bot.message_handler(func=lambda m: re.match(r'^\+\d+(\.\d+)?$', m.text.strip()))
+# 存款处理
+@bot.message_handler(func=lambda m: re.match(r'^\+\d+(?:\.\d+)?$', m.text.strip()))
 def deposit(msg):
     chat_id, user_id = msg.chat.id, msg.from_user.id
     amt = float(msg.text.lstrip('+'))
@@ -173,7 +173,25 @@ def deposit(msg):
     )
     conn.commit()
     summary = build_summary(chat_id, user_id)
-    bot.reply_to(msg, f"✅ 已入款 +{amt} ({currency})\n日期\n{summary}")
+    bot.reply_to(msg, f"✅ 已入款 +{ceil2(amt)} ({currency})\n日期\n{summary}")
+
+# 删除处理
+@bot.message_handler(func=lambda m: re.match(r'^-\d+(?:\.\d+)?$', m.text.strip()))
+def withdraw(msg):
+    chat_id, user_id = msg.chat.id, msg.from_user.id
+    amt = float(msg.text.lstrip('-'))
+    cursor.execute(
+        'SELECT id FROM transactions WHERE chat_id=%s AND user_id=%s AND amount=%s ORDER BY date DESC LIMIT 1',
+        (chat_id, user_id, amt)
+    )
+    row = cursor.fetchone()
+    if not row:
+        return bot.reply_to(msg, f"删除失败，没有找到金额 {amt} 的记录。")
+    cursor.execute('DELETE FROM transactions WHERE id=%s', (row['id'],))
+    conn.commit()
+    currency, *_ = get_settings(chat_id, user_id)
+    summary = build_summary(chat_id, user_id)
+    bot.reply_to(msg, f"✅ 已删除 -{ceil2(amt)} ({currency})\n日期\n{summary}")
 
 if __name__ == '__main__':
     bot.infinity_polling(timeout=60)
