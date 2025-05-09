@@ -1,4 +1,3 @@
-```python
 import os
 import re
 import math
@@ -95,9 +94,9 @@ def build_summary(chat_id, user_id):
     today = datetime.now().strftime('%d-%m-%Y')
     header = f"订单号：{today}"
     footer = (
-        f"\n这里是今天的总数\n"
+        f"这里是今天的总数\n"
         f"已入款（{len(rows)}笔）：{total_amt} ({currency})\n"
-        f"已下发（0笔）：0 ({currency})\n\n"
+        f"已下发（0笔）：0 (USDT)\n\n"
         f"总入款金额：{total_amt} ({currency})\n"
         f"汇率：{rate}\n费率：{fee}%\n佣金：{commission}%\n\n"
         f"应下发：{ceil2(total_amt*(1-fee/100))}({currency}) | {converted} (USDT)\n"
@@ -142,7 +141,6 @@ def set_trade(msg):
                 return bot.reply_to(msg, f"设置失败\n{k}格式请设置数字")
     if params['rate'] is None:
         return bot.reply_to(msg, '设置失败\n至少需要提供汇率：设置汇率：9')
-    # upsert
     cursor.execute('SELECT 1 FROM settings WHERE chat_id=%s AND user_id=%s',(chat_id,user_id))
     if cursor.fetchone():
         cursor.execute(
@@ -180,4 +178,3 @@ def deposit(msg):
 
 if __name__=='__main__':
     bot.infinity_polling(timeout=60)
-```
