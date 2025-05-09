@@ -37,10 +37,12 @@ conn.commit()
 
 # === 固定菜单按钮 ===
 def get_reply_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False)
-    markup.row("▶️ Start", "💱 设置交易")
-    markup.row("📖 指令大全", "🔄 计算重启")
-    markup.row("❓ 需要帮助", "🛠 定制机器人")
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False, row_width=2)
+    markup.add(
+        types.KeyboardButton("▶️ Start"), types.KeyboardButton("💱 设置交易"),
+        types.KeyboardButton("📖 指令大全"), types.KeyboardButton("🔄 计算重启"),
+        types.KeyboardButton("❓ 需要帮助"), types.KeyboardButton("🛠 定制机器人")
+    )
     return markup
 
 # === 获取用户设定 ===
