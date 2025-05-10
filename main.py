@@ -107,9 +107,8 @@ def cmd_set_trade(msg):
         f"中介佣金：{commission}%"
     )
 
-import transactions
-
 # —— 启动轮询 —— #
+import transactions
 if __name__ == "__main__":
     bot.remove_webhook()      # 确保没有 webhook
     bot.infinity_polling()    # 只启动一次
