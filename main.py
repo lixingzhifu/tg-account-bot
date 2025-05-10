@@ -1,24 +1,24 @@
-# main.py
-import os
+:contentReference[oaicite:5]{index=5}quire:contentReference[oaicite:6]{index=6}
+## 2:contentReference[oaicite:7]{index=7}
 import re
 import math
+impor:contentReference[oaicite:8]{index=8}ot
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
-import pytz
-import telebot
 
-# —— 配置 —— #
-TOKEN        = os.getenv('TOKEN')
-DATABASE_URL = os.getenv('DATABASE_URL')
-# 马来西亚时区
+# ———————— 配置区 —————:contentReference[oaicite:9]{index=9}
+# 时区：马来西亚
 TZ = pytz.timezone('Asia/Kuala_Lumpur')
 
+# 初始化 Bot
 bot = telebot.TeleBot(TOKEN)
+
+# 连接 Postgres
 conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 cursor = conn.cursor()
 
-# —— 初始化表 —— #
+# 建表（第一次运行会自动创建）
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS settings (
     chat_id BIGINT,
@@ -27,13 +27,15 @@ CREATE TABLE IF NOT EXISTS settings (
     rate DOUBLE PRECISION DEFAULT 0,
     fee_rate DOUBLE PRECISION DEFAULT 0,
     commission_rate DOUBLE PRECISION DEFAULT 0,
-    PRIMARY KEY(chat_id, user_id)
-)""")
+    PRIMARY KEY (chat_id, user_id)
+);
+""")
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS transactions (
     id SERIAL PRIMARY KEY,
     chat_id BIGINT,
     user_id BIGINT,
+    name TEXT,
     amount DOUBLE PRECISION,
     rate DOUBLE PRECISION,
     fee_rate DOUBLE PRECISION,
@@ -41,83 +43,96 @@ CREATE TABLE IF NOT EXISTS transactions (
     currency TEXT,
     date TIMESTAMP,
     message_id BIGINT
-)""")
+);
+""")
 conn.commit()
 
-# —— 工具函数 —— #
-def fmt2(v):  # 保留两位小数
-    return math.floor(v*100)/100
 
-def get_settings(chat, user):
+# ———————— 工具函数 ————————
+
+def now():
+    """返回马来西亚当前时间"""
+    return datetime.now(TZ)
+
+def fmt_time(dt):
+    return dt.strftime('%H:%M:%S')
+
+def ceil2(x):
+    return math.ceil(x * 100) / 100.0
+
+def is_admin(chat_id, user_id):
+    """群里只有管理员/群主可用记账"""
+    try:
+        member = bot.get_chat_member(chat_id, user_id)
+        return member.status in ('creator', 'administrator')
+    except:
+        return False
+
+def get_settings(chat_id, user_id):
     cursor.execute(
         "SELECT currency, rate, fee_rate, commission_rate FROM settings WHERE chat_id=%s AND user_id=%s",
-        (chat, user)
+        (chat_id, user_id)
     )
     row = cursor.fetchone()
-    if not row:
-        return 'RMB', 0, 0, 0
-    return row['currency'], row['rate'], row['fee_rate'], row['commission_rate']
+    if row:
+        return row['currency'], row['rate'], row['fee_rate'], row['commission_rate']
+    return None  # 尚未设置
 
-def show_summary(chat, user):
+def show_summary(chat_id, user_id):
+    # 只在每次入笔后回显当日总览
     cursor.execute(
         "SELECT * FROM transactions WHERE chat_id=%s AND user_id=%s ORDER BY id",
-        (chat, user)
+        (chat_id, user_id)
     )
-    recs = cursor.fetchall()
-    total = sum(r['amount'] for r in recs)
-    cur, rate, fee, comm = get_settings(chat, user)
-    # 计算应下发和佣金
-    net_rmb = fmt2(total*(1 - fee/100))
-    net_usdt = fmt2(net_rmb/rate) if rate else 0
-    comm_rmb = fmt2(total*(comm/100))
-    comm_usdt = fmt2(comm_rmb/rate) if rate else 0
+    rows = cursor.fetchall()
+    total = sum(r['amount'] for r in rows)
+    cur, rate, fee, comm = get_settings(chat_id, user_id)
+    # 计算
+    after_fee = ceil2(total * (1 - fee/100))
+    after_fee_usdt = ceil2(after_fee / rate) if rate else 0
+    comm_rmb = ceil2(total * comm/100)
+    comm_usdt = ceil2(comm_rmb / rate) if rate else 0
 
-    # 汇总输出
-    lines = [f"已入款（{len(recs)}笔）：{total} ({cur})",
-             f"总入款金额：{total} ({cur})",
-             f"汇率：{rate}",
-             f"费率：{fee}%",
-             f"佣金：{comm}%\n",
-             f"应下发：{net_rmb}({cur}) | {net_usdt} (USDT)",
-             f"已下发：0.0({cur}) | 0.0 (USDT)",
-             f"未下发：{net_rmb}({cur}) | {net_usdt} (USDT)"]
+    lines = []
+    for idx, r in enumerate(rows, 1):
+        t = fmt_time(r['date'])
+        usdt = ceil2(r['amount']*(1-r['fee_rate']/100)/r['rate']) if r['rate'] else 0
+        lines.append(f"{idx}. {t} {r['amount']}*{1-r['fee_rate']/100:.2f}/{r['rate']} = {usdt}  {r['name']}")
+        if r['commission_rate']>0:
+            lines.append(f"{idx}. {t} {r['amount']}*{r['commission_rate']/100:.3f} = {ceil2(r['amount']*r['commission_rate']/100)} 【佣金】")
+    body = "\n".join(lines)
+
+    summary = (
+        f"\n\n已入款（{len(rows)}笔）：{total} ({cur})\n"
+        f"总入款金额：{total} ({cur})\n汇率：{rate}\n费率：{fee}%\n佣金：{comm}%\n\n"
+        f"应下发：{after_fee}({cur}) | {after_fee_usdt} (USDT)\n"
+        f"已下发：0.0({cur}) | 0.0 (USDT)\n"
+        f"未下发：{after_fee}({cur}) | {after_fee_usdt} (USDT)\n"
+    )
     if comm>0:
-        lines.append(f"\n中介佣金应下发：{comm_rmb}({cur}) | {comm_usdt} (USDT)")
-    return "\n".join(lines)
+        summary += f"\n中介佣金应下发：{comm_rmb}({cur}) | {comm_usdt} (USDT)"
+    return body + summary
 
-def format_time(dt):
-    return dt.astimezone(TZ).strftime('%d-%m-%Y %H:%M:%S')
 
-def next_order_id(chat, user):
-    cursor.execute(
-        "SELECT LPAD(COALESCE(MAX(id),0)+1::text,3,'0') AS next_id "
-        "FROM transactions WHERE chat_id=%s AND user_id=%s",
-        (chat, user)
-    )
-    return cursor.fetchone()['next_id']
+# ———————— 消息处理 ————————
 
-# —— 处理 Start/Help/ID —— #
-@bot.message_handler(commands=['start','help'])
-def cmd_start(msg):
-    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row('💱 设置交易','📊 汇总')
-    markup.row('+ 入笔','🗑️ 删除订单')
-    bot.send_message(
-        msg.chat.id,
-        "欢迎使用 LX 记账机器人 ✅\n"
-        "请先 /trade 设置交易参数，然后使用下方按钮或命令操作。",
-        reply_markup=markup
-    )
+@bot.message_handler(commands=['start'])
+def cmd_start(m):
+    keyboard = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.row('💱 设置交易', '📊 汇总')
+    keyboard.row('❌ 删除订单', '🛠️ 帮助')
+    bot.send_message(m.chat.id,
+                     "欢迎使用 LX 记账机器人 ✅\n请在私聊或群里（管理员）使用。", 
+                     reply_markup=keyboard)
 
 @bot.message_handler(commands=['id'])
-def cmd_id(msg):
-    bot.reply_to(msg, f"chat_id：{msg.chat.id}\nuser_id：{msg.from_user.id}")
+def cmd_id(m):
+    bot.reply_to(m, f"chat_id: `{m.chat.id}`\nuser_id: `{m.from_user.id}`", parse_mode='Markdown')
 
-# —— 设置交易 —— #
-@bot.message_handler(commands=['trade'])
-@bot.message_handler(func=lambda m: m.text and m.text.strip() in ['设置交易','💱 设置交易'])
-def cmd_trade(msg):
-    bot.reply_to(msg,
+@bot.message_handler(func=lambda m: m.text in ['设置交易','💱 设置交易'])
+def cmd_trade(m):
+    bot.reply_to(m,
+        "请按以下格式发送：\n"
         "设置交易指令\n"
         "设置货币：RMB\n"
         "设置汇率：0\n"
@@ -126,133 +141,130 @@ def cmd_trade(msg):
     )
 
 @bot.message_handler(func=lambda m: '设置交易指令' in (m.text or ''))
-def handle_trade_config(msg):
-    chat, user = msg.chat.id, msg.from_user.id
-    text = msg.text.replace('：',':').upper()
-    cur = rate = fee = comm = None
-    errs = []
-    for L in text.split('\n'):
-        L2 = L.replace(' ','')
-        if '货币' in L2:
-            cur = re.sub(r'[^A-Z]','',L2.split(':',1)[1])
-        if '汇率' in L2:
-            try: rate = float(re.findall(r'\d+\.?\d*',L2)[0])
-            except: errs.append("汇率格式错误")
-        if '费率' in L2:
-            try: fee = float(re.findall(r'\d+\.?\d*',L2)[0])
-            except: errs.append("费率格式错误")
-        if '中介佣金' in L2 or '佣金' in L2:
-            try: comm = float(re.findall(r'\d+\.?\d*',L2)[0])
-            except: errs.append("佣金格式错误")
-    if errs:
-        return bot.reply_to(msg,"设置错误\n"+'\n'.join(errs))
-    if rate is None:
-        return bot.reply_to(msg,"⚠️ 至少需要提供 汇率")
-    # 写入 DB
+def set_trade(m):
+    chat_id, user_id = m.chat.id, m.from_user.id
+    # 私聊或群管可用
+    if m.chat.type!='private' and not is_admin(chat_id, user_id):
+        return bot.reply_to(m, "⚠️ 只有管理员可以设置交易参数。")
+    text = m.text.replace('：',':').splitlines()
+    c, r, f, cm = None, None, None, None
+    for L in text:
+        L=L.strip()
+        if L.startswith('设置货币'):
+            c=L.split(':',1)[1].strip()
+        if L.startswith('设置汇率'):
+            r=float(re.findall(r'\d+\.?\d*',L)[0])
+        if L.startswith('设置费率'):
+            f=float(re.findall(r'\d+\.?\d*',L)[0])
+        if L.startswith('中介佣金'):
+            cm=float(re.findall(r'\d+\.?\d*',L)[0])
+    if r is None:
+        return bot.reply_to(m, "❌ 请至少指定汇率：设置汇率：9")
+    # 存库
     cursor.execute("""
         INSERT INTO settings(chat_id,user_id,currency,rate,fee_rate,commission_rate)
         VALUES(%s,%s,%s,%s,%s,%s)
-        ON CONFLICT(chat_id,user_id) DO UPDATE SET
-          currency=EXCLUDED.currency,
-          rate=EXCLUDED.rate,
-          fee_rate=EXCLUDED.fee_rate,
-          commission_rate=EXCLUDED.commission_rate
-    """, (chat,user,cur or 'RMB',rate,fee or 0,comm or 0))
+        ON CONFLICT(chat_id,user_id) DO UPDATE
+          SET currency=EXCLUDED.currency,
+              rate=EXCLUDED.rate,
+              fee_rate=EXCLUDED.fee_rate,
+              commission_rate=EXCLUDED.commission_rate
+    """, (chat_id,user_id,c or 'RMB',r,f or 0,cm or 0))
     conn.commit()
-    bot.reply_to(msg,
-        "✅ 设置成功\n"
-        f"设置货币：{cur or 'RMB'}\n"
-        f"设置汇率：{rate}\n"
-        f"设置费率：{fee or 0}%\n"
-        f"中介佣金：{comm or 0}%"
+    bot.reply_to(m,
+        f"✅ 设置成功\n货币：{c or 'RMB'}\n汇率：{r}\n费率：{f or 0}%\n佣金：{cm or 0}%"
     )
 
-# —— 入笔 (+1000) —— #
-@bot.message_handler(regexp=r'^[+＋]\s*\d+(\.\d+)?$')
-def handle_add(msg):
-    chat,user = msg.chat.id,msg.from_user.id
-    # 权限检查：群里非管理员不允许
-    if msg.chat.type != 'private':
-        member = bot.get_chat_member(chat, user)
-        if not (member.status in ['creator','administrator']):
-            return bot.reply_to(msg,"⚠️ 你没有权限入笔，请联系群管理员。")
-    amt = float(re.findall(r'\d+(\.\d+)?', msg.text)[0])
-    cur,rate,fee,comm = get_settings(chat,user)
-    if rate==0:
-        return bot.reply_to(msg,"⚠️ 请先用 /trade 设置汇率，然后再入笔。")
-    now = datetime.now(TZ)
-    oid = next_order_id(chat,user)
-    cursor.execute("""
-        INSERT INTO transactions
-        (chat_id,user_id,amount,rate,fee_rate,commission_rate,currency,date,message_id)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-    """, (chat,user,amt,rate,fee,comm,cur,now,msg.message_id))
-    conn.commit()
+@bot.message_handler(func=lambda m: re.match(r'^[+\-]\s*\d+(\.\d+)?', m.text or ''))
+def handle_amount(m):
+    chat_id, user_id = m.chat.id, m.from_user.id
+    # 权限
+    if m.chat.type!='private' and not is_admin(chat_id, user_id):
+        return bot.reply_to(m, "⚠️ 只有管理员可以记账。")
+    st = get_settings(chat_id,user_id)
+    if not st:
+        return bot.reply_to(m, "❌ 请先设置交易：/trade")
+    cur, rate, fee, comm = st
+    sign = 1 if m.text.strip().startswith('+') else -1
+    amt = float(re.findall(r'\d+(\.\d+)?', m.text)[0]) * sign
+    now_dt = now()
+    # 如果是“+”，插入；“-”则删除最近一条
+    if sign>0:
+        name = m.from_user.username or m.from_user.first_name or '匿名'
+        cursor.execute("""
+            INSERT INTO transactions(chat_id,user_id,name,amount,rate,fee_rate,commission_rate,currency,date,message_id)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (
+            chat_id,user_id,name,amt,rate,fee,comm,cur, now_dt, m.message_id
+        ))
+        conn.commit()
+        # 计算本次下发 & 本次佣金
+        after_fee = ceil2(amt*(1-fee/100))
+        usdt = ceil2(after_fee/rate) if rate else 0
+        comm_amt = ceil2(amt*(comm/100))
+        reply = (
+            f"✅ 已入款 {amt}\n"
+            f"编号：{m.message_id}\n"
+            f"{fmt_time(now_dt)} {amt}*{1-fee/100:.2f}/{rate} = {usdt}  {name}\n"
+        )
+        if comm>0:
+            reply += f"{fmt_time(now_dt)} {amt}*{comm/100:.3f} = {comm_amt} 【佣金】\n"
+        reply += show_summary(chat_id,user_id)
+        bot.reply_to(m, reply)
+    else:
+        # 删除最近一条
+        cursor.execute("""
+            SELECT id FROM transactions
+            WHERE chat_id=%s AND user_id=%s
+            ORDER BY id DESC LIMIT 1
+        """, (chat_id,user_id))
+        rec = cursor.fetchone()
+        if rec:
+            tid = rec['id']
+            cursor.execute("DELETE FROM transactions WHERE id=%s", (tid,))
+            conn.commit()
+            bot.reply_to(m, f"✅ 删除订单成功，编号：{tid:03d}")
+        else:
+            bot.reply_to(m, "⚠️ 暂无可删除的入款记录。")
 
-    # 单笔回执
-    net = fmt2(amt*(1-fee/100))
-    usdt = fmt2(net/rate)
-    comm_amt = fmt2(amt*(comm/100))
-    reply = [
-        f"✅ 已入款 +{amt} ({cur})",
-        f"编号：{oid}",
-        f"{format_time(now)}  {amt}*{(1-fee/100):.2f}/{rate} = {usdt}  @{msg.from_user.username or msg.from_user.id}",
-    ]
-    if comm>0:
-        reply.append(f"{format_time(now)}  {amt}*{comm/100:.3f} = {comm_amt} 【佣金】")
-    reply.append("")
-    reply.extend(show_summary(chat,user).split("\n"))
-    bot.reply_to(msg,"\n".join(reply))
-
-# —— 删除最近一笔 (“-1000”) —— #
-@bot.message_handler(regexp=r'^[-－]\s*\d+(\.\d+)?$')
-def handle_delete_last(msg):
-    chat,user = msg.chat.id,msg.from_user.id
-    # 同样权限检查
-    if msg.chat.type!='private':
-        member=bot.get_chat_member(chat,user)
-        if member.status not in ['creator','administrator']:
-            return bot.reply_to(msg,"⚠️ 你没有权限删除订单。")
-    # 删最新一条
-    cursor.execute("""
-        DELETE FROM transactions
-        WHERE chat_id=%s AND user_id=%s
-        ORDER BY id DESC
-        LIMIT 1
-    """,(chat,user))
+@bot.message_handler(func=lambda m: m.text and m.text.startswith('删除订单'))
+def delete_by_id(m):
+    chat_id, user_id = m.chat.id, m.from_user.id
+    if m.chat.type!='private' and not is_admin(chat_id,user_id):
+        return bot.reply_to(m, "⚠️ 只有管理员可以删除订单。")
+    parts = m.text.strip().split()
+    if len(parts)!=2 or not parts[1].isdigit():
+        return bot.reply_to(m, "❌ 格式：删除订单 <编号>")
+    tid = int(parts[1])
+    cursor.execute("DELETE FROM transactions WHERE id=%s AND chat_id=%s AND user_id=%s", (tid,chat_id,user_id))
     if cursor.rowcount:
         conn.commit()
-        bot.reply_to(msg,"✅ 删除最近一笔成功。")
+        bot.reply_to(m, f"✅ 删除订单成功，编号：{tid:03d}")
     else:
-        bot.reply_to(msg,"⚠️ 没有可删除的订单。")
+        bot.reply_to(m, "⚠️ 未找到指定编号的订单。")
 
-# —— 删除指定编号 （“删除订单 001”） —— #
-@bot.message_handler(func=lambda m: m.text and re.match(r'^删除订单\s*\d{3}$',m.text))
-def handle_delete_one(msg):
-    chat,user = msg.chat.id,msg.from_user.id
-    if msg.chat.type!='private':
-        member=bot.get_chat_member(chat,user)
-        if member.status not in ['creator','administrator']:
-            return bot.reply_to(msg,"⚠️ 你没有权限删除订单。")
-    oid = msg.text.strip().split()[-1]
-    # 把 001 → 找到对应那条
-    cursor.execute("""
-      DELETE FROM transactions
-      WHERE chat_id=%s AND user_id=%s
-        AND LPAD(id::text,3,'0')=%s
-    """,(chat,user,oid))
-    if cursor.rowcount:
-        conn.commit()
-        bot.reply_to(msg,f"✅ 删除订单成功，编号：{oid}")
-    else:
-        bot.reply_to(msg,"⚠️ 未找到该编号订单。")
+@bot.message_handler(func=lambda m: m.text in ['📊 汇总','汇总'])
+def cmd_summary(m):
+    chat_id, user_id = m.chat.id, m.from_user.id
+    if m.chat.type!='private' and not is_admin(chat_id,user_id):
+        return bot.reply_to(m, "⚠️ 只有管理员可以看汇总。")
+    if not get_settings(chat_id,user_id):
+        return bot.reply_to(m, "❌ 请先设置交易：/trade")
+    bot.reply_to(m, show_summary(chat_id,user_id))
 
-# —— 汇总命令 —— #
-@bot.message_handler(func=lambda m: m.text and m.text.strip() in ['汇总','📊 汇总'])
-def cmd_summary(msg):
-    chat,user = msg.chat.id, msg.from_user.id
-    bot.reply_to(msg, show_summary(chat,user))
+@bot.message_handler(func=lambda m: m.text in ['🛠️ 帮助','帮助','❓ 需要帮助'])
+def cmd_help(m):
+    bot.reply_to(m,
+        "📖 指令大全：\n"
+        "/start — 欢迎\n"
+        "/id — 查看 chat_id & user_id\n"
+        "/trade — 设置交易参数\n"
+        "+1000 或 名称+1000 — 入笔\n"
+        "-1000 — 删除最近一笔\n"
+        "删除订单 001 — 按 id 删除\n"
+        "汇总 — 查看当天汇总"
+    )
 
-# —— 启动 —— #
+# 启动轮询
 bot.remove_webhook()
 bot.infinity_polling()
