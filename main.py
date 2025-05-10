@@ -1,50 +1,80 @@
-# main.py
+# handlers.py
 import os
-from telebot import TeleBot, types
+import re
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from telebot import TeleBot
 
+# —— 配置 —— #
 TOKEN = os.getenv("TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 bot = TeleBot(TOKEN)
 
-# 1. /start 和 “记账” 都触发欢迎菜单
-@bot.message_handler(commands=['start'])
-def handle_start(msg):
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.row('💱 设置交易', '📘 指令大全')
-    bot.send_message(
-        msg.chat.id,
-        "欢迎使用 LX 记账机器人 ✅\n请选择菜单指令：",
-        reply_markup=kb
+# 建立数据库连接
+conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+cursor = conn.cursor()
+
+# helper：取设置
+def get_settings(chat_id, user_id):
+    cursor.execute(
+        "SELECT currency, rate, fee_rate, commission_rate "
+        "FROM settings WHERE chat_id=%s AND user_id=%s",
+        (chat_id, user_id)
     )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return row["currency"], row["rate"], row["fee_rate"], row["commission_rate"]
 
-@bot.message_handler(func=lambda m: m.text == '记账')
-def handle_start_alias(msg):
-    handle_start(msg)
+# 处理“设置交易指令”正文
+@bot.message_handler(func=lambda m: m.text and m.text.strip().startswith("设置交易指令"))
+def handle_set_trade(msg):
+    chat_id = msg.chat.id
+    user_id = msg.from_user.id
+    text = msg.text.replace("：", ":")
+    # 逐行提取
+    currency = rate = fee = commission = None
+    for line in text.splitlines():
+        if line.startswith("设置货币"):
+            currency = line.split(":",1)[1].strip().upper()
+        elif line.startswith("设置汇率"):
+            try: rate = float(re.findall(r"\d+\.?\d*", line)[0])
+            except: pass
+        elif line.startswith("设置费率"):
+            try: fee = float(re.findall(r"\d+\.?\d*", line)[0])
+            except: pass
+        elif line.startswith("中介佣金"):
+            try: commission = float(re.findall(r"\d+\.?\d*", line)[0])
+            except: pass
 
-# 2. 点击 “设置交易” 或输入 /trade
-@bot.message_handler(commands=['trade'])
-@bot.message_handler(func=lambda m: m.text in ['设置交易', '💱 设置交易'])
-def handle_trade_cmd(msg):
-    # 如果是在群里，必须是管理员或群主才能继续
-    if msg.chat.type != 'private':
-        member = bot.get_chat_member(msg.chat.id, msg.from_user.id)
-        if member.status not in ['administrator', 'creator']:
-            bot.reply_to(msg, "❌ 只有群管理员才能设置交易参数")
-            return
+    # 校验
+    if not (currency and rate is not None and fee is not None and commission is not None):
+        return bot.reply_to(msg, "❌ 设置错误，请检查格式，必须包含：\n"
+                                "设置货币：X\n设置汇率：数字\n设置费率：数字\n中介佣金：数字")
 
-    # 私聊或管理员，展示模板
-    template = (
-        "请按以下格式发送：\n"
-        "设置交易指令\n"
-        "设置货币：RMB\n"
-        "设置汇率：0\n"
-        "设置费率：0\n"
-        "中介佣金：0"
+    # 存库（假设已有 settings 表，并且主键(chat_id,user_id)已建好）
+    try:
+        cursor.execute("""
+            INSERT INTO settings(chat_id, user_id, currency, rate, fee_rate, commission_rate)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (chat_id, user_id) DO UPDATE SET
+                currency = EXCLUDED.currency,
+                rate = EXCLUDED.rate,
+                fee_rate = EXCLUDED.fee_rate,
+                commission_rate = EXCLUDED.commission_rate
+        """, (chat_id, user_id, currency, rate, fee, commission))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return bot.reply_to(msg, f"❌ 存储失败，请联系管理员\n错误：{e}")
+
+    # 回复成功
+    reply = (
+        "✅ 设置成功\n"
+        f"设置货币：{currency}\n"
+        f"设置汇率：{rate}\n"
+        f"设置费率：{fee}%\n"
+        f"中介佣金：{commission}%"
     )
-    bot.reply_to(msg, template)
-
-# 3. 引入剩余 handler（入笔／汇总 等），等我们下一步再补
-import handlers
-
-if __name__ == '__main__':
-    bot.remove_webhook()
-    bot.infinity_polling()
+    bot.reply_to(msg, reply)
