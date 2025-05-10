@@ -11,11 +11,12 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 
 bot = telebot.TeleBot(TOKEN)
 
-# 连接数据库
+# —— 连接数据库并开启 autocommit —— 
 conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+conn.autocommit = True
 cursor = conn.cursor()
 
-# 初始化表结构（settings 和 transactions），含 user_id 列和联合主键
+# —— 初始化表结构 —— 
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS settings (
     chat_id BIGINT,
@@ -42,7 +43,6 @@ CREATE TABLE IF NOT EXISTS transactions (
     message_id BIGINT
 );
 ''')
-conn.commit()
 
 def ceil2(n):
     return math.ceil(n * 100) / 100.0
@@ -53,10 +53,7 @@ def get_settings(chat_id, user_id):
         (chat_id, user_id)
     )
     row = cursor.fetchone()
-    if row:
-        return row['currency'], row['rate'], row['fee_rate'], row['commission_rate']
-    else:
-        return 'RMB', 0, 0, 0
+    return (row['currency'], row['rate'], row['fee_rate'], row['commission_rate']) if row else ('RMB', 0, 0, 0)
 
 def show_summary(chat_id, user_id):
     cursor.execute(
@@ -66,14 +63,13 @@ def show_summary(chat_id, user_id):
     records = cursor.fetchall()
     total = sum(r['amount'] for r in records)
     currency, rate, fee, commission = get_settings(chat_id, user_id)
-
     converted_total = ceil2(total * (1 - fee/100) / rate) if rate else 0
     commission_total_rmb = ceil2(total * commission/100)
     commission_total_usdt = ceil2(commission_total_rmb / rate) if rate else 0
 
     lines = []
-    for idx, r in enumerate(records, start=1):
-        t = r['date'].strftime('%d-%m-%Y %H:%M:%S')
+    for idx, r in enumerate(records, 1):
+        t = r['date'].strftime('%H:%M:%S')
         after_fee = r['amount'] * (1 - r['fee_rate']/100)
         usdt = ceil2(after_fee / r['rate']) if r['rate'] else 0
         lines.append(f"{idx}. {t}  {r['amount']}*{1-r['fee_rate']/100:.2f}/{r['rate']} = {usdt}  @{r['name']}")
@@ -81,17 +77,17 @@ def show_summary(chat_id, user_id):
             comm_amt = r['amount'] * r['commission_rate']/100
             lines.append(f"   {idx}. {t}  {r['amount']}*{r['commission_rate']/100:.2f} = {ceil2(comm_amt)} 【佣金】")
 
-    reply = "\n".join(lines) + "\n\n"
-    reply += f"已入款（{len(records)}笔）：{total} ({currency})\n"
-    reply += f"已下发（0笔）：0.0 (USDT)\n\n"
-    reply += f"总入款金额：{total} ({currency})\n"
-    reply += f"汇率：{rate}\n费率：{fee}%\n佣金：{commission}%\n\n"
-    reply += f"应下发：{ceil2(total*(1-fee/100))}({currency}) | {converted_total} (USDT)\n"
-    reply += f"已下发：0.0({currency}) | 0.0 (USDT)\n"
-    reply += f"未下发：{ceil2(total*(1-fee/100))}({currency}) | {converted_total} (USDT)\n"
+    summary = "\n".join(lines)
+    summary += f"\n\n已入款（{len(records)}笔）：{total} ({currency})\n已下发（0笔）：0.0 (USDT)\n\n"
+    summary += f"总入款金额：{total} ({currency})\n汇率：{rate}\n费率：{fee}%\n佣金：{commission}%\n\n"
+    summary += f"应下发：{ceil2(total*(1-fee/100))}({currency}) | {converted_total} (USDT)\n"
+    summary += f"已下发：0.0({currency}) | 0.0 (USDT)\n"
+    summary += f"未下发：{ceil2(total*(1-fee/100))}({currency}) | {converted_total} (USDT)\n"
     if commission > 0:
-        reply += f"\n中介佣金应下发：{commission_total_rmb}({currency}) | {commission_total_usdt} (USDT)"
-    return reply
+        summary += f"\n中介佣金应下发：{commission_total_rmb}({currency}) | {commission_total_usdt} (USDT)"
+    return summary
+
+# —— Bot Handlers —— 
 
 @bot.message_handler(commands=['start','reset'])
 def handle_start(message):
@@ -100,7 +96,6 @@ def handle_start(message):
             'DELETE FROM transactions WHERE chat_id=%s AND user_id=%s',
             (message.chat.id, message.from_user.id)
         )
-        conn.commit()
         bot.reply_to(message, "🔄 已清空记录")
         return
 
@@ -113,7 +108,7 @@ def handle_start(message):
 @bot.message_handler(commands=['id'])
 def handle_id(message):
     bot.reply_to(
-        message, 
+        message,
         f"你的 chat_id：{message.chat.id}\n你的 user_id：{message.from_user.id}"
     )
 
@@ -157,7 +152,6 @@ def set_trade_config(message):
           fee_rate=EXCLUDED.fee_rate,
           commission_rate=EXCLUDED.commission_rate
     ''',(chat_id,user_id,currency or 'RMB',rate,fee or 0,commission or 0))
-    conn.commit()
 
     bot.reply_to(
         message,
@@ -185,7 +179,6 @@ def handle_amount(message):
     ''',(
         chat_id,user_id,name,amount,rate,fee,comm,cur,now,message.message_id
     ))
-    conn.commit()
 
     summary = show_summary(chat_id, user_id)
     bot.reply_to(
