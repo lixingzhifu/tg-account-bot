@@ -1,4 +1,5 @@
 # main.py
+import pytz
 import os
 import re
 import psycopg2
@@ -105,6 +106,8 @@ def cmd_set_trade(msg):
         f"设置费率：{fee}%\n"
         f"中介佣金：{commission}%"
     )
+
+import transactions
 
 # —— 启动轮询 —— #
 if __name__ == "__main__":
