@@ -1,13 +1,16 @@
-:contentReference[oaicite:5]{index=5}quire:contentReference[oaicite:6]{index=6}
-## 2:contentReference[oaicite:7]{index=7}
+import os
 import re
 import math
-impor:contentReference[oaicite:8]{index=8}ot
+import pytz
+import telebot
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
 
-# ———————— 配置区 —————:contentReference[oaicite:9]{index=9}
+# ———————— 配置区 ————————
+TOKEN = os.getenv('TOKEN')
+DATABASE_URL = os.getenv('DATABASE_URL')
+
 # 时区：马来西亚
 TZ = pytz.timezone('Asia/Kuala_Lumpur')
 
@@ -51,7 +54,6 @@ conn.commit()
 # ———————— 工具函数 ————————
 
 def now():
-    """返回马来西亚当前时间"""
     return datetime.now(TZ)
 
 def fmt_time(dt):
@@ -61,7 +63,6 @@ def ceil2(x):
     return math.ceil(x * 100) / 100.0
 
 def is_admin(chat_id, user_id):
-    """群里只有管理员/群主可用记账"""
     try:
         member = bot.get_chat_member(chat_id, user_id)
         return member.status in ('creator', 'administrator')
@@ -76,10 +77,9 @@ def get_settings(chat_id, user_id):
     row = cursor.fetchone()
     if row:
         return row['currency'], row['rate'], row['fee_rate'], row['commission_rate']
-    return None  # 尚未设置
+    return None
 
 def show_summary(chat_id, user_id):
-    # 只在每次入笔后回显当日总览
     cursor.execute(
         "SELECT * FROM transactions WHERE chat_id=%s AND user_id=%s ORDER BY id",
         (chat_id, user_id)
@@ -87,7 +87,6 @@ def show_summary(chat_id, user_id):
     rows = cursor.fetchall()
     total = sum(r['amount'] for r in rows)
     cur, rate, fee, comm = get_settings(chat_id, user_id)
-    # 计算
     after_fee = ceil2(total * (1 - fee/100))
     after_fee_usdt = ceil2(after_fee / rate) if rate else 0
     comm_rmb = ceil2(total * comm/100)
@@ -143,7 +142,6 @@ def cmd_trade(m):
 @bot.message_handler(func=lambda m: '设置交易指令' in (m.text or ''))
 def set_trade(m):
     chat_id, user_id = m.chat.id, m.from_user.id
-    # 私聊或群管可用
     if m.chat.type!='private' and not is_admin(chat_id, user_id):
         return bot.reply_to(m, "⚠️ 只有管理员可以设置交易参数。")
     text = m.text.replace('：',':').splitlines()
@@ -160,7 +158,6 @@ def set_trade(m):
             cm=float(re.findall(r'\d+\.?\d*',L)[0])
     if r is None:
         return bot.reply_to(m, "❌ 请至少指定汇率：设置汇率：9")
-    # 存库
     cursor.execute("""
         INSERT INTO settings(chat_id,user_id,currency,rate,fee_rate,commission_rate)
         VALUES(%s,%s,%s,%s,%s,%s)
@@ -178,7 +175,6 @@ def set_trade(m):
 @bot.message_handler(func=lambda m: re.match(r'^[+\-]\s*\d+(\.\d+)?', m.text or ''))
 def handle_amount(m):
     chat_id, user_id = m.chat.id, m.from_user.id
-    # 权限
     if m.chat.type!='private' and not is_admin(chat_id, user_id):
         return bot.reply_to(m, "⚠️ 只有管理员可以记账。")
     st = get_settings(chat_id,user_id)
@@ -188,7 +184,6 @@ def handle_amount(m):
     sign = 1 if m.text.strip().startswith('+') else -1
     amt = float(re.findall(r'\d+(\.\d+)?', m.text)[0]) * sign
     now_dt = now()
-    # 如果是“+”，插入；“-”则删除最近一条
     if sign>0:
         name = m.from_user.username or m.from_user.first_name or '匿名'
         cursor.execute("""
@@ -198,7 +193,6 @@ def handle_amount(m):
             chat_id,user_id,name,amt,rate,fee,comm,cur, now_dt, m.message_id
         ))
         conn.commit()
-        # 计算本次下发 & 本次佣金
         after_fee = ceil2(amt*(1-fee/100))
         usdt = ceil2(after_fee/rate) if rate else 0
         comm_amt = ceil2(amt*(comm/100))
@@ -212,7 +206,6 @@ def handle_amount(m):
         reply += show_summary(chat_id,user_id)
         bot.reply_to(m, reply)
     else:
-        # 删除最近一条
         cursor.execute("""
             SELECT id FROM transactions
             WHERE chat_id=%s AND user_id=%s
@@ -265,6 +258,5 @@ def cmd_help(m):
         "汇总 — 查看当天汇总"
     )
 
-# 启动轮询
 bot.remove_webhook()
 bot.infinity_polling()
