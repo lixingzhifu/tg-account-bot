@@ -1,58 +1,66 @@
 # transactions.py
-
 import re
 from datetime import datetime
-from main import bot
+from telebot import TeleBot
 from db import conn, cursor
-from utils import ceil2, now_ml, get_settings, format_time, show_summary
+from utils import ceil2, get_settings, show_summary
+from main import bot
 
 print("👉 Transactions handler loaded")
 
-@bot.message_handler(func=lambda m: re.match(r'^[+]\s*\d+(\.\d+)?$', m.text or ''))
-def handle_add(m):
-    chat,user = m.chat.id, m.from_user.id
-    currency, rate, fee, comm = get_settings(chat,user)
+# —— 入笔 +1000
+@bot.message_handler(func=lambda m: re.match(r"^[+]\s*\d+", m.text or ""))
+def handle_add(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    cur, rate, fee, commission = get_settings(chat_id, user_id)
     if rate == 0:
-        return bot.reply_to(m, "⚠️ 请先 /trade 设置汇率后再入笔")
-    amt = float(re.findall(r'\d+\.?\d*', m.text)[0])
-    name = m.from_user.username or m.from_user.first_name or '匿名'
-    now = now_ml()
+        return bot.reply_to(message, "⚠️ 请先发送“设置交易”并填写汇率，才能入笔")
+
+    amt = float(re.findall(r"\d+\.?\d*", message.text)[0])
+    name = message.from_user.username or message.from_user.first_name or "匿名"
+    now  = datetime.utcnow()
+
     cursor.execute("""
-      INSERT INTO transactions(chat_id,user_id,name,amount,rate,fee_rate,commission_rate,currency,date)
-      VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
-    """, (chat,user,name,amt,rate,fee,comm,currency,now))
+        INSERT INTO transactions
+          (chat_id,user_id,name,amount,rate,fee_rate,commission_rate,currency,date,message_id)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    """, (chat_id,user_id,name,amt,rate,fee,commission,cur,now,message.message_id))
     conn.commit()
+
     cursor.execute("SELECT CURRVAL(pg_get_serial_sequence('transactions','id')) AS last_id")
-    lid = cursor.fetchone()["last_id"]
-    return bot.reply_to(m,
-      f"✅ 已入款 +{amt}\n编号：{lid}\n"
-      + show_summary(chat,user)
+    last_id = cursor.fetchone()["last_id"]
+
+    summary = show_summary(chat_id, user_id)
+    return bot.reply_to(message,
+        f"✅ 已入款 +{amt}\n"
+        f"编号：{str(last_id).zfill(3)}\n"
+        f"{summary}"
     )
 
-@bot.message_handler(func=lambda m: m.text.strip() == '-')
-def handle_del_last(m):
-    chat,user = m.chat.id, m.from_user.id
+# —— 删除最近一笔
+@bot.message_handler(func=lambda m: re.match(r"^-\s*\d+", m.text or ""))
+def handle_remove_last(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
     cursor.execute("""
-      DELETE FROM transactions
-      WHERE chat_id=%s AND user_id=%s
-      ORDER BY id DESC LIMIT 1
-    """,(chat,user))
+        DELETE FROM transactions
+        WHERE chat_id=%s AND user_id=%s
+        ORDER BY id DESC
+        LIMIT 1
+    """, (chat_id, user_id))
     conn.commit()
-    return bot.reply_to(m, "✅ 已删除最近一笔")
+    return bot.reply_to(message, "✅ 已删除最近一笔入款记录")
 
-@bot.message_handler(func=lambda m: m.text.startswith('删除订单'))
-def handle_del_id(m):
-    chat,user = m.chat.id, m.from_user.id
-    parts = m.text.split()
-    if len(parts)!=2 or not parts[1].isdigit():
-        return bot.reply_to(m,"❌ 格式：删除订单 001")
-    tid = int(parts[1])
+# —— 按编号删除
+@bot.message_handler(func=lambda m: re.match(r"^删除订单\s*\d+", m.text or ""))
+def handle_remove_by_id(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    tid = int(re.findall(r"\d+", message.text)[0])
     cursor.execute("""
-      DELETE FROM transactions
-      WHERE chat_id=%s AND user_id=%s AND id=%s
-    """,(chat,user,tid))
-    if cursor.rowcount:
-        conn.commit()
-        return bot.reply_to(m,f"✅ 删除订单成功，编号：{tid:03d}")
-    else:
-        return bot.reply_to(m,"⚠️ 未找到该编号")
+        DELETE FROM transactions
+        WHERE chat_id=%s AND user_id=%s AND id=%s
+    """, (chat_id, user_id, tid))
+    conn.commit()
+    return bot.reply_to(message, f"✅ 删除订单成功，编号：{str(tid).zfill(3)}")
