@@ -1,4 +1,5 @@
 # transactions.py
+print("👉 Transactions handler loaded")
 import telebot
 from datetime import datetime
 import math, re
