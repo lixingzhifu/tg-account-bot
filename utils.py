@@ -1,3 +1,4 @@
+# utils.py
 import math
 import pytz
 from datetime import datetime
@@ -7,7 +8,17 @@ def ceil2(x):
     return math.ceil(x * 100) / 100.0
 
 def format_time(dt: datetime) -> str:
+    """
+    把 UTC 时间 dt 转为马来西亚时区的 HH:MM:SS 格式；
+    如果 dt 是 None，则返回当前马来西亚时区时间。
+    """
     tz = pytz.timezone("Asia/Kuala_Lumpur")
+    if dt is None:
+        # 用本地时间代替
+        return datetime.now(tz).strftime("%H:%M:%S")
+    # 如果 dt 不是 timezone-aware，需要先假设它是 UTC
+    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+        dt = dt.replace(tzinfo=pytz.utc)
     return dt.astimezone(tz).strftime("%H:%M:%S")
 
 def get_settings(chat_id, user_id):
@@ -35,13 +46,14 @@ def show_summary(chat_id, user_id):
 
     lines = []
     for i, r in enumerate(records, 1):
-        t = format_time(r["date"])
+        t = format_time(r.get("date"))
         after_fee = r["amount"] * (1 - r["fee_rate"]/100)
         usdt = ceil2(after_fee / r["rate"]) if r["rate"] else 0
         lines.append(f"{i}. {t} {r['amount']}*{(1-r['fee_rate']/100):.2f}/{r['rate']} = {usdt}  {r['name']}")
         if r["commission_rate"] > 0:
             com_amt = ceil2(r["amount"] * r["commission_rate"]/100)
-            lines.append(f"{i}. {t} {r['amount']}*{r['commission_rate']/100:.2f} = {com_amt} 【佣金】")
+            # 把佣金公式从 "*0.01" 改成 "*0.005" 形式显示
+            lines.append(f"{i}. {t} {r['amount']}*{r['commission_rate']/100:.3f} = {com_amt} 【佣金】")
 
     summary = "\n".join(lines)
     summary += (
