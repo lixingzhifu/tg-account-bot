@@ -1,3 +1,4 @@
+# transactions.py
 import re
 from datetime import datetime
 from main import bot
@@ -12,7 +13,7 @@ def handle_add(message):
     user_id  = message.from_user.id
     currency, rate, fee, commission = get_settings(chat_id, user_id)
     if rate == 0:
-        return bot.reply_to(message, "⚠️ 请先发送“设置交易”并填写汇率，才能入笔")
+        return bot.reply_to(message, "⚠️ 请先发送 “设置交易” 并填写汇率，才能入笔")
 
     amount = float(re.findall(r"\d+\.?\d*", message.text)[0])
     name   = message.from_user.username or message.from_user.first_name or "匿名"
