@@ -1,27 +1,22 @@
-# transactions.py
-
 import re
 from datetime import datetime
-from telebot import TeleBot
+from main import bot
 from db import conn, cursor
 from utils import ceil2, get_settings, format_time, show_summary
-from main import bot   # <— 复用主程序里的那个 bot
 
 print("👉 Transactions handler loaded")
 
 @bot.message_handler(func=lambda m: re.match(r"^[+]\s*\d+", m.text or ""))
 def handle_add(message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    # 检查汇率
+    chat_id  = message.chat.id
+    user_id  = message.from_user.id
     currency, rate, fee, commission = get_settings(chat_id, user_id)
     if rate == 0:
         return bot.reply_to(message, "⚠️ 请先发送“设置交易”并填写汇率，才能入笔")
 
     amount = float(re.findall(r"\d+\.?\d*", message.text)[0])
-    name = message.from_user.username or message.from_user.first_name or "匿名"
-    now = datetime.utcnow()
+    name   = message.from_user.username or message.from_user.first_name or "匿名"
+    now    = datetime.utcnow()
 
     cursor.execute("""
         INSERT INTO transactions
@@ -33,7 +28,8 @@ def handle_add(message):
     cursor.execute("SELECT CURRVAL(pg_get_serial_sequence('transactions','id')) AS last_id")
     last_id = cursor.fetchone()["last_id"]
 
-    return bot.reply_to(message,
+    return bot.reply_to(
+        message,
         f"✅ 已入款 +{amount}\n"
         f"编号：{last_id}\n"
         + show_summary(chat_id, user_id)
