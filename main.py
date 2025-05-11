@@ -2,12 +2,11 @@
 import os, re
 from telebot import TeleBot, types
 from db import conn, cursor
-from utils import get_settings
 
 TOKEN = os.getenv("TOKEN")
 bot = TeleBot(TOKEN)
 
-@bot.message_handler(commands=['start', '记账'])
+@bot.message_handler(commands=['start','记账'])
 def cmd_start(msg):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row('设置交易')
@@ -15,12 +14,10 @@ def cmd_start(msg):
                  "欢迎使用 LX 记账机器人 ✅\n请选择：",
                  reply_markup=kb)
 
-@bot.message_handler(func=lambda m: m.text == '设置交易' or m.text.startswith('/trade'))
+@bot.message_handler(func=lambda m: m.text=='设置交易' or m.text.startswith('/trade'))
 def cmd_set_trade(msg):
-    txt = msg.text.strip()
-    lines = txt.splitlines()
-    # 验证格式
-    if len(lines) != 5 or not lines[0].startswith('设置交易指令'):
+    lines = msg.text.strip().splitlines()
+    if len(lines)!=5 or not lines[0].startswith('设置交易指令'):
         return bot.reply_to(msg,
             "请按以下格式发送：\n"
             "设置交易指令\n"
@@ -30,10 +27,10 @@ def cmd_set_trade(msg):
             "中介佣金：0.5"
         )
     try:
-        currency  = lines[1].split('：',1)[1].strip()
-        rate      = float(lines[2].split('：',1)[1].strip())
-        fee       = float(lines[3].split('：',1)[1].strip())
-        commission= float(lines[4].split('：',1)[1].strip())
+        currency   = lines[1].split('：',1)[1]
+        rate       = float(lines[2].split('：',1)[1])
+        fee        = float(lines[3].split('：',1)[1])
+        commission = float(lines[4].split('：',1)[1])
     except:
         return bot.reply_to(msg, "设置错误，请检查数字格式")
 
@@ -42,13 +39,13 @@ def cmd_set_trade(msg):
     try:
         cursor.execute("""
             INSERT INTO settings(chat_id,user_id,currency,rate,fee_rate,commission_rate)
-            VALUES (%s,%s,%s,%s,%s,%s)
+            VALUES(%s,%s,%s,%s,%s,%s)
             ON CONFLICT(chat_id,user_id) DO UPDATE SET
               currency=EXCLUDED.currency,
               rate=EXCLUDED.rate,
               fee_rate=EXCLUDED.fee_rate,
               commission_rate=EXCLUDED.commission_rate
-        """, (chat_id, user_id, currency, rate, fee, commission))
+        """, (chat_id,user_id,currency,rate,fee,commission))
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -62,9 +59,6 @@ def cmd_set_trade(msg):
         f"中介佣金：{commission}%"
     )
 
-# 在命令处理完之后再导入 transactions.py，保证 bot 实例可复用
-import transactions
-
-if __name__ == "__main__":
-    bot.remove_webhook()       # 确保没 webhook
-    bot.infinity_polling()     # 只启动一次
+if __name__=="__main__":
+    bot.remove_webhook()
+    bot.infinity_polling()
