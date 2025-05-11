@@ -122,5 +122,6 @@ def cmd_set_trade(msg):
 
 # —— 启动轮询 —— #
 if __name__ == '__main__':
+  import transactions
     bot.remove_webhook()      # 确保没有 webhook
     bot.infinity_polling()    # 永久轮询
