@@ -244,6 +244,8 @@ def cmd_transactions(m):
     # 其余不处理
     return
 
+import transactions
+
 if __name__ == "__main__":
     bot.remove_webhook()
     bot.infinity_polling()
