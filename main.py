@@ -42,7 +42,11 @@ CREATE TABLE IF NOT EXISTS transactions (
   currency         TEXT    NOT NULL,
   date             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   message_id       BIGINT,
-  status           TEXT DEFAULT 'pending'  -- 状态字段
+  status           TEXT DEFAULT 'pending',  -- 状态字段，'pending', 'sent'
+  amount_after_fee DOUBLE PRECISION NOT NULL,
+  amount_in_usdt   DOUBLE PRECISION NOT NULL,
+  commission_rmb   DOUBLE PRECISION NOT NULL,
+  commission_usdt  DOUBLE PRECISION NOT NULL
 );
 """)
 conn.commit()
@@ -142,9 +146,11 @@ def handle_deposit(msg):
 
     try:
         cursor.execute("""
-        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency))
+        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, 
+                                  amount_after_fee, amount_in_usdt, commission_rmb, commission_usdt)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency,
+              amount_after_fee, amount_in_usdt, commission_rmb, commission_usdt))
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -212,13 +218,11 @@ def delete_order(msg):
 # —— 下发功能 —— #
 @bot.message_handler(func=lambda m: re.match(r'^下发(\d+(\.\d+)?)$', m.text or ''))
 def handle_withdrawal(msg):
-    # 提取下发金额
     match = re.match(r'^下发(\d+(\.\d+)?)$', msg.text)
     if not match:
         return bot.reply_to(msg, "❌ 无效的下发格式。请输入有效的金额，示例：下发1000")
 
     withdrawal_amount = float(match.group(1))
-
     chat_id = msg.chat.id
     user_id = msg.from_user.id
 
@@ -230,7 +234,7 @@ def handle_withdrawal(msg):
 
     # 获取当前的应下发金额
     cursor.execute("""
-        SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s AND status = 'pending'
+        SELECT SUM(amount_after_fee) FROM transactions WHERE chat_id = %s AND user_id = %s AND status = 'pending'
     """, (chat_id, user_id))
     total_amount_to_send = cursor.fetchone()['sum']
 
@@ -246,12 +250,12 @@ def handle_withdrawal(msg):
     """, (chat_id, user_id))
     conn.commit()
 
-    # 反馈下发信息
+    # 返回下发信息
     bot.reply_to(msg, f"✅ 已成功下发 {withdrawal_amount} (RMB)\n已更新应下发和未下发金额。")
 
     # 更新后重新显示交易状态
     cursor.execute("""
-        SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s AND status = 'pending'
+        SELECT SUM(amount_after_fee) FROM transactions WHERE chat_id = %s AND user_id = %s AND status = 'pending'
     """, (chat_id, user_id))
     remaining_to_send = cursor.fetchone()['sum']
 
