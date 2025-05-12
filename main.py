@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   currency         TEXT    NOT NULL,
   date             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   message_id       BIGINT,
-  status           TEXT DEFAULT 'pending',  -- 状态字段，'pending', 'sent'
+  status           TEXT DEFAULT 'pending',
   amount_after_fee DOUBLE PRECISION NOT NULL,
   amount_in_usdt   DOUBLE PRECISION NOT NULL,
   commission_rmb   DOUBLE PRECISION NOT NULL,
@@ -156,11 +156,9 @@ def handle_deposit(msg):
         conn.rollback()
         return bot.reply_to(msg, f"❌ 存储失败：{e}")
 
-    # 获取已入款总数
     cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
     total_amount = cursor.fetchone()['sum']
 
-    # 生成返回信息，增加空格和格式调整
     result = (
         f"✅ 已入款 +{amount} ({currency})\n\n"
         f"编号：{transaction_id}\n\n"
@@ -214,52 +212,6 @@ def delete_order(msg):
     except Exception as e:
         conn.rollback()
         bot.reply_to(msg, f"❌ 删除订单失败：{e}")
-
-# —— 下发功能 —— #
-@bot.message_handler(func=lambda m: re.match(r'^下发(\d+(\.\d+)?)$', m.text or ''))
-def handle_withdrawal(msg):
-    match = re.match(r'^下发(\d+(\.\d+)?)$', msg.text)
-    if not match:
-        return bot.reply_to(msg, "❌ 无效的下发格式。请输入有效的金额，示例：下发1000")
-
-    withdrawal_amount = float(match.group(1))
-    chat_id = msg.chat.id
-    user_id = msg.from_user.id
-
-    # 检查用户是否有设置交易
-    cursor.execute("SELECT * FROM settings WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-    settings = cursor.fetchone()
-    if not settings:
-        return bot.reply_to(msg, "❌ 请先“设置交易”并填写汇率，才能下发。")
-
-    # 获取当前的应下发金额
-    cursor.execute("""
-        SELECT SUM(amount_after_fee) FROM transactions WHERE chat_id = %s AND user_id = %s AND status = 'pending'
-    """, (chat_id, user_id))
-    total_amount_to_send = cursor.fetchone()['sum']
-
-    if withdrawal_amount > total_amount_to_send:
-        return bot.reply_to(msg, f"❌ 你请求的下发金额 ({withdrawal_amount} RMB) 超过了应下发金额 ({total_amount_to_send} RMB)。")
-
-    # 更新应下发和已下发金额
-    cursor.execute("""
-        UPDATE transactions
-        SET status = 'sent'
-        WHERE chat_id = %s AND user_id = %s AND status = 'pending'
-        LIMIT 1
-    """, (chat_id, user_id))
-    conn.commit()
-
-    # 返回下发信息
-    bot.reply_to(msg, f"✅ 已成功下发 {withdrawal_amount} (RMB)\n已更新应下发和未下发金额。")
-
-    # 更新后重新显示交易状态
-    cursor.execute("""
-        SELECT SUM(amount_after_fee) FROM transactions WHERE chat_id = %s AND user_id = %s AND status = 'pending'
-    """, (chat_id, user_id))
-    remaining_to_send = cursor.fetchone()['sum']
-
-    bot.reply_to(msg, f"当前剩余应下发金额：{remaining_to_send} RMB")
 
 # —— 启动轮询 —— #
 if __name__ == '__main__':
