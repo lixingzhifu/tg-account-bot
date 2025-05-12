@@ -3,6 +3,7 @@ import re
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from telebot import TeleBot, types
+from datetime import datetime
 
 # —— 环境变量 —— #
 TOKEN = os.getenv("TOKEN")
@@ -43,13 +44,6 @@ CREATE TABLE IF NOT EXISTS transactions (
   message_id       BIGINT,
   amount_after_fee DOUBLE PRECISION,
   amount_in_base_currency DOUBLE PRECISION
-);
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS currency_rates (
-    currency_code TEXT PRIMARY KEY,
-    rate_to_base DOUBLE PRECISION NOT NULL
 );
 """)
 conn.commit()
@@ -131,43 +125,44 @@ def cmd_set_trade(msg):
 # —— 入账（记录交易） —— #
 @bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
 def handle_deposit(msg):
+    # 获取用户的 chat_id 和 user_id
     chat_id = msg.chat.id
     user_id = msg.from_user.id
 
-    # 查询用户的设置
+    # 检查是否已经设置交易参数
     cursor.execute("SELECT * FROM settings WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
     settings = cursor.fetchone()
     if not settings:
         return bot.reply_to(msg, "❌ 请先“设置交易”并填写汇率，才能入账。")
 
-    # 获取货币汇率
-    cursor.execute("SELECT * FROM currency_rates WHERE currency_code = %s", (settings['currency'],))
-    currency_rate = cursor.fetchone()
-    if not currency_rate:
-        return bot.reply_to(msg, "❌ 汇率数据未找到，请先设置汇率。")
-
-    # 提取金额并计算
+    # 使用更严格的正则来提取金额
     match = re.findall(r'[\+入笔]*([0-9]+(\.\d+)?)', msg.text)
     if not match:
         return bot.reply_to(msg, "❌ 无效的入账格式。请输入有效的金额，示例：+1000 或 入1000")
 
+    # 提取金额并转换为浮动类型
     amount = float(match[0][0])  # 提取并转换金额
+
+    # 获取当前设置的交易参数
+    currency = settings['currency']
     rate = settings['rate']
     fee_rate = settings['fee_rate']
     commission_rate = settings['commission_rate']
 
-    # 计算金额
-    amount_after_fee = amount * (1 - fee_rate / 100)
-    amount_in_base_currency = round(amount_after_fee / currency_rate['rate_to_base'], 2)
-    commission_rmb = round(amount * (commission_rate / 100), 2)
-    commission_in_base_currency = round(commission_rmb / currency_rate['rate_to_base'], 2)
+    # 计算下发金额和佣金
+    amount_after_fee = amount * (1 - fee_rate / 100)  # 扣除费率后的金额
+    amount_in_base_currency = amount_after_fee / rate  # 换算成基础货币金额
+    commission_rmb = amount * (commission_rate / 100)
+    commission_in_base_currency = commission_rmb / rate  # 佣金换算成基础货币
 
     # 存储入账记录
     try:
         cursor.execute("""
-        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, amount_after_fee, amount_in_base_currency)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, settings['currency'], amount_after_fee, amount_in_base_currency))
+        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, 
+                                  amount_after_fee, amount_in_base_currency, commission_rmb, commission_usdt)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency,
+              amount_after_fee, amount_in_base_currency, commission_rmb, commission_in_base_currency))
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -175,14 +170,18 @@ def handle_deposit(msg):
 
     # 返回入账信息
     bot.reply_to(msg, 
-        f"✅ 已入款 {amount} ({settings['currency']})\n"
-        f"编号：{msg.message_id}\n"
-        f"应下发：{amount_after_fee} ({settings['currency']})\n"
-        f"实际下发金额：{amount_in_base_currency} (基础货币)\n"
-        f"佣金：{commission_rmb} ({settings['currency']}) | {commission_in_base_currency} (基础货币)"
+        f"✅ 已入款 +{amount} ({currency})\n"
+        f"编号：{str(id)}\n"
+        f"{str(id)}. {str(datetime.now().strftime('%H:%M:%S'))} {amount} * {fee_rate / 100} / {rate} = {amount_in_base_currency} {currency} linlin131313\n"
+        f"{str(id)}. {str(datetime.now().strftime('%H:%M:%S'))} {amount} * {commission_rate / 100} = {commission_rmb} 【佣金】\n"
+        f"已入款（{str(id)}笔）：{amount} ({currency})\n"
+        f"总入款金额：{total_amount} ({currency})\n"
+        f"汇率：{rate}\n"
+        f"费率：{fee_rate}%\n"
+        f"佣金：{commission_rmb} ({currency}) | {commission_in_base_currency} (USDT)"
     )
 
 # 启动轮询
 if __name__ == '__main__':
-    bot.remove_webhook()
-    bot.infinity_polling()
+    bot.remove_webhook()      # 确保没有 webhook
+    bot.infinity_polling()    # 永久轮询
