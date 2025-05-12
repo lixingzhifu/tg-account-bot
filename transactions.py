@@ -1,9 +1,11 @@
 # transactions.py
 
 import re
-from datetime import datetime, timedelta
-from telebot import types
-from main import bot, cursor, conn  # 复用主程序里的 bot 实例 和 数据库连接
+from datetime import datetime
+from telebot import TeleBot
+from db import conn, cursor
+from utils import ceil2, get_settings, show_summary
+from main import bot
 
 def get_settings(chat_id, user_id):
     """从 settings 表里取当前配置，没配置就返回 None"""
