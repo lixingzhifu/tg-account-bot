@@ -3,6 +3,8 @@ import re
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from telebot import TeleBot, types
+import pytz
+from datetime import datetime
 
 # —— 环境变量 —— #
 TOKEN = os.getenv("TOKEN")
@@ -121,7 +123,6 @@ def cmd_set_trade(msg):
 # —— 入账（记录交易） —— #
 @bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
 def handle_deposit(msg):
-    # 获取用户的 chat_id 和 user_id
     chat_id = msg.chat.id
     user_id = msg.from_user.id
 
@@ -131,13 +132,13 @@ def handle_deposit(msg):
     if not settings:
         return bot.reply_to(msg, "❌ 请先“设置交易”并填写汇率，才能入账。")
 
-    # 修复：使用更严格的正则来提取金额
+    # 使用更严格的正则来提取金额
     match = re.findall(r'[\+入笔]*([0-9]+(\.\d+)?)', msg.text)
     if not match:
         return bot.reply_to(msg, "❌ 无效的入账格式。请输入有效的金额，示例：+1000 或 入1000")
 
     # 提取金额并转换为浮动类型
-    amount = float(match[0][0])  # 提取并转换金额
+    amount = float(match[0][0])
 
     # 获取当前设置的交易参数
     currency = settings['currency']
