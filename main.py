@@ -130,6 +130,15 @@ def handle_deposit(msg):
     commission_rmb = round(amount * (commission_rate / 100), 2)
     commission_usdt = round(commission_rmb / rate, 2)
 
+    # 获取当前时间（马来西亚时区）
+    malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+    time_now = datetime.now(malaysia_tz).strftime('%H:%M:%S')
+
+    # 生成编号（简单的序列号）
+    cursor.execute("SELECT COUNT(*) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+    transaction_count = cursor.fetchone()['count'] + 1
+    transaction_id = str(transaction_count).zfill(3)
+
     try:
         cursor.execute("""
         INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency)
@@ -140,12 +149,40 @@ def handle_deposit(msg):
         conn.rollback()
         return bot.reply_to(msg, f"❌ 存储失败：{e}")
 
-    bot.reply_to(msg, 
-        f"✅ 已入款 {amount} ({currency})\n"
-        f"实际下发金额：{amount_after_fee} ({currency})\n"
-        f"应下发：{amount_in_usdt} USDT\n"
-        f"佣金：{commission_rmb} ({currency}) | {commission_usdt} USDT"
+    # 生成返回信息
+    result = (
+        f"✅ 已入款 +{amount} ({currency})\n"
+        f"编号：{transaction_id}\n"
+        f"{transaction_id}. {time_now} {amount} * {1 - fee_rate / 100} / {rate} = {amount_in_usdt}  {msg.from_user.username}\n"
     )
+
+    if commission_rate > 0:
+        result += (
+            f"{transaction_id}. {time_now} {amount} * {commission_rate / 100} = {commission_rmb} 【佣金】\n"
+        )
+
+    result += (
+        f"已入款（{transaction_count}笔）：{amount} ({currency})\n"
+        f"总入款金额：{amount} ({currency})\n"
+        f"汇率：{rate}\n"
+        f"费率：{fee_rate}%\n"
+    )
+
+    if commission_rate > 0:
+        result += f"佣金：{commission_rmb} ({currency}) | {commission_usdt} USDT\n"
+    else:
+        result += "佣金：0.0 (RMB) | 0.0 USDT\n"
+
+    result += (
+        f"应下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n"
+        f"已下发：0.0 ({currency}) | 0.00 (USDT)\n"
+        f"未下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n"
+    )
+
+    if commission_rate > 0:
+        result += f"中介佣金应下发：{commission_rmb} ({currency}) | {commission_usdt} (USDT)\n"
+
+    bot.reply_to(msg, result)
 
 # —— 启动轮询 —— #
 if __name__ == '__main__':
