@@ -1,21 +1,21 @@
 # main.py
+
 import os
 import re
-from datetime import datetime, timedelta
-
+from datetime import timedelta
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from telebot import TeleBot, types
 
 from utils import parse_trade_text, human_now, ceil2, parse_amount_text
 
-# ——— 环境变量 ———
+# —— 环境变量 —— #
 TOKEN        = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 bot = TeleBot(TOKEN)
 
-# ——— 数据库连接 & 建表 ———
+# —— 数据库连接 & 建表 —— #
 conn   = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 cursor = conn.cursor()
 
@@ -47,28 +47,29 @@ CREATE TABLE IF NOT EXISTS transactions (
 """)
 conn.commit()
 
-# ——— DB 操作封装 ———
+# —— DB 操作 —— #
 def get_settings(chat_id, user_id):
     cursor.execute(
-        "SELECT currency, rate, fee_rate, commission_rate"
-        " FROM settings WHERE chat_id=%s AND user_id=%s",
+        "SELECT currency, rate, fee_rate, commission_rate "
+        "FROM settings WHERE chat_id=%s AND user_id=%s",
         (chat_id, user_id)
     )
     return cursor.fetchone()  # None or dict
 
 def upsert_settings(chat_id, user_id, currency, rate, fee, com):
     cursor.execute("""
-    INSERT INTO settings (chat_id,user_id,currency,rate,fee_rate,commission_rate)
+    INSERT INTO settings
+      (chat_id,user_id,currency,rate,fee_rate,commission_rate)
     VALUES (%s,%s,%s,%s,%s,%s)
-    ON CONFLICT (chat_id,user_id) DO UPDATE
-      SET currency=EXCLUDED.currency,
-          rate=EXCLUDED.rate,
-          fee_rate=EXCLUDED.fee_rate,
-          commission_rate=EXCLUDED.commission_rate
-    """, (chat_id, user_id, currency, rate, fee, com))
+    ON CONFLICT(chat_id,user_id) DO UPDATE SET
+      currency = EXCLUDED.currency,
+      rate     = EXCLUDED.rate,
+      fee_rate = EXCLUDED.fee_rate,
+      commission_rate = EXCLUDED.commission_rate
+    """, (chat_id,user_id,currency,rate,fee,com))
     conn.commit()
 
-def add_transaction(chat_id, user_id, name, amount, rate, fee, com, currency, dt, msg_id):
+def add_transaction(chat_id,user_id,name,amount,rate,fee,com,currency,dt,msg_id):
     cursor.execute("""
     INSERT INTO transactions
       (chat_id,user_id,name,amount,rate,fee_rate,commission_rate,currency,created_at,message_id)
@@ -79,7 +80,7 @@ def add_transaction(chat_id, user_id, name, amount, rate, fee, com, currency, dt
     conn.commit()
     return new_id
 
-def delete_latest(chat_id, user_id):
+def delete_latest(chat_id,user_id):
     cursor.execute("""
     DELETE FROM transactions
     WHERE id = (
@@ -93,7 +94,7 @@ def delete_latest(chat_id, user_id):
     conn.commit()
     return row["id"] if row else None
 
-def delete_by_id(chat_id, user_id, tid):
+def delete_by_id(chat_id,user_id,tid):
     cursor.execute("""
     DELETE FROM transactions
     WHERE chat_id=%s AND user_id=%s AND id=%s
@@ -103,7 +104,7 @@ def delete_by_id(chat_id, user_id, tid):
     conn.commit()
     return row["id"] if row else None
 
-def fetch_all(chat_id, user_id):
+def fetch_all(chat_id,user_id):
     cursor.execute("""
     SELECT * FROM transactions
     WHERE chat_id=%s AND user_id=%s
@@ -111,7 +112,7 @@ def fetch_all(chat_id, user_id):
     """, (chat_id, user_id))
     return cursor.fetchall()
 
-# ——— 权限检查 ———
+# —— 权限判断 —— #
 def is_admin(chat_id, user_id):
     info = bot.get_chat(chat_id)
     if info.type in ("group","supergroup"):
@@ -119,7 +120,7 @@ def is_admin(chat_id, user_id):
         return any(ad.user.id == user_id for ad in admins)
     return True
 
-# ——— /start 和 “记账” ———
+# —— /start & “记账” —— #
 @bot.message_handler(commands=['start'])
 @bot.message_handler(func=lambda m: m.text == '记账')
 def cmd_start(msg):
@@ -132,7 +133,7 @@ def cmd_start(msg):
         reply_markup=markup
     )
 
-# ——— /reset ———
+# —— /reset —— #
 @bot.message_handler(commands=['reset'])
 def cmd_reset(msg):
     if not is_admin(msg.chat.id, msg.from_user.id):
@@ -142,16 +143,16 @@ def cmd_reset(msg):
       (msg.chat.id, msg.from_user.id)
     )
     conn.commit()
-    bot.reply_to(msg, "🔄 已清空本群组本用户的所有记录")
+    bot.reply_to(msg, "🔄 已清空所有记录")
 
-# ——— /trade ———
+# —— /trade —— #
 @bot.message_handler(commands=['trade'])
 @bot.message_handler(func=lambda m: m.text == '💱 设置交易')
 def cmd_trade(msg):
     if not is_admin(msg.chat.id, msg.from_user.id):
         return bot.reply_to(msg, "❌ 无权限")
     bot.reply_to(msg,
-      "格式如下（复制整段并修改数字/货币字母）：\n"
+      "格式如下（复制整段并修改）：\n"
       "设置交易指令\n"
       "设置货币：RMB\n"
       "设置汇率：9\n"
@@ -159,16 +160,14 @@ def cmd_trade(msg):
       "中介佣金：0.5"
     )
 
-# ——— 解析设置交易 ———
+# —— 解析 & 存储 设置 —— #
 @bot.message_handler(func=lambda m: m.text.startswith("设置交易指令"))
 def cmd_set_trade(msg):
     if not is_admin(msg.chat.id, msg.from_user.id):
         return bot.reply_to(msg, "❌ 无权限")
     cur, rate, fee, com, errs = parse_trade_text(msg.text)
     if errs:
-        return bot.reply_to(msg, "设置错误\n" + "\n".join(errs))
-    if rate is None:
-        return bot.reply_to(msg, "❌ 至少需要提供汇率：设置汇率：9")
+        return bot.reply_to(msg, "设置错误：\n" + "\n".join(errs))
     upsert_settings(msg.chat.id, msg.from_user.id,
                     cur or "RMB", rate, fee or 0, com or 0)
     bot.reply_to(msg,
@@ -179,41 +178,40 @@ def cmd_set_trade(msg):
       f"设置佣金：{com or 0}%"
     )
 
-# ——— 入笔 +1000 / 入1000 / 入笔1000 ———
+# —— +1000 / 入1000 —— #
 @bot.message_handler(func=lambda m: re.match(r'^[+]\s*\d+', m.text or ''))
 @bot.message_handler(func=lambda m: re.match(r'^(入笔|入)\s*\d+', m.text or ''))
 def cmd_transactions(msg):
-    # 权限
     if msg.chat.type in ("group","supergroup") and not is_admin(msg.chat.id, msg.from_user.id):
         return bot.reply_to(msg, "❌ 无权限")
     cfg = get_settings(msg.chat.id, msg.from_user.id)
     if not cfg:
-        return bot.reply_to(msg, "❌ 请先“设置交易”并填写汇率，才能入笔。")
+        return bot.reply_to(msg, "❌ 请先「设置交易」并填写汇率，才能入笔。")
 
-    name, amount = parse_amount_text(msg.text)
+    _, amount = parse_amount_text(msg.text)
     if amount is None:
         return
 
     now_hms, now_dt = human_now()
     tid = add_transaction(
-        msg.chat.id, msg.from_user.id,
-        name or msg.from_user.first_name or "匿名",
-        amount, cfg[1], cfg[2], cfg[3], cfg[0], now_dt, msg.message_id
+      msg.chat.id, msg.from_user.id,
+      msg.from_user.username or msg.from_user.first_name or "匿名",
+      amount, cfg[1], cfg[2], cfg[3], cfg[0], now_dt, msg.message_id
     )
 
-    aft       = amount * (1 - cfg[2]/100)
-    usdt      = ceil2(aft/cfg[1]) if cfg[1] else 0
-    com_rmb   = ceil2(amount * (cfg[3]/100))
-    com_usdt  = ceil2(com_rmb/cfg[1]) if cfg[1] else 0
+    aft      = amount * (1 - cfg[2]/100)
+    usdt     = ceil2(aft / cfg[1]) if cfg[1] else 0
+    com_rmb  = ceil2(amount * (cfg[3]/100))
+    com_usdt = ceil2(com_rmb / cfg[1]) if cfg[1] else 0
 
     s  = f"✅ 已入款 +{amount:.1f}\n"
     s += f"编号：{tid:03d}\n"
-    s += f"1. {now_hms} {amount:.1f}*{1-cfg[2]/100:.2f}/{cfg[1]:.1f} = {usdt:.2f}  {name}\n"
+    s += f"1. {now_hms} {amount:.1f}*{1-cfg[2]/100:.2f}/{cfg[1]:.1f} = {usdt:.2f}  {msg.from_user.username}\n"
     if cfg[3] > 0:
         s += f"1. {now_hms} {amount:.1f}*{cfg[3]/100:.3f} = {com_rmb:.2f} 【佣金】\n"
     bot.reply_to(msg, s)
 
-# ——— 删除最近一笔 ———
+# —— 删除最近一笔 —— #
 @bot.message_handler(func=lambda m: re.match(r'^-\s*\d+', m.text or ''))
 def cmd_delete_latest(msg):
     if msg.chat.type in ("group","supergroup") and not is_admin(msg.chat.id, msg.from_user.id):
@@ -223,7 +221,7 @@ def cmd_delete_latest(msg):
         return bot.reply_to(msg, "⚠️ 无可删除记录")
     bot.reply_to(msg, f"✅ 删除订单成功，编号：{tid:03d}")
 
-# ——— 删除指定编号 ———
+# —— 删除指定编号 —— #
 @bot.message_handler(func=lambda m: re.match(r'^删除订单\s*\d+', m.text or ''))
 def cmd_delete_specific(msg):
     if msg.chat.type in ("group","supergroup") and not is_admin(msg.chat.id, msg.from_user.id):
@@ -234,7 +232,7 @@ def cmd_delete_specific(msg):
         return bot.reply_to(msg, f"⚠️ 找不到编号：{num:03d}")
     bot.reply_to(msg, f"✅ 删除订单成功，编号：{num:03d}")
 
-# ——— /summary / 点击“📊 汇总” ———
+# —— /summary —— #
 @bot.message_handler(commands=['summary'])
 @bot.message_handler(func=lambda m: m.text == '📊 汇总')
 def cmd_summary(msg):
@@ -264,7 +262,7 @@ def cmd_summary(msg):
     )
     bot.reply_to(msg, summary)
 
-# ——— 启动轮询 ———
+# —— 启动轮询 —— #
 if __name__ == "__main__":
-    bot.remove_webhook()      # 保证没有 webhook
-    bot.infinity_polling()    # 只启动一次
+    bot.remove_webhook()      # 确保没有 webhook
+    bot.infinity_polling()    # 永久轮询
