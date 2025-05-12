@@ -50,7 +50,7 @@ conn.commit()
 @bot.message_handler(commands=['start'])
 def cmd_start(msg):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(types.KeyboardButton('/trade'), types.KeyboardButton('设置交易'))
+    kb.add(types.KeyboardButton('/trade'), types.KeyboardButton('设置交易'), types.KeyboardButton('计算重启'))
     bot.reply_to(msg,
         "欢迎使用 LX 记账机器人 ✅\n"
         "请选择菜单：",
@@ -114,6 +114,25 @@ def cmd_set_trade(msg):
         f"设置费率：{fee}\n"
         f"中介佣金：{comm}"
     )
+
+# —— 计算重启 —— #
+@bot.message_handler(func=lambda m: m.text == '计算重启')
+def reset_calculation(msg):
+    chat_id = msg.chat.id
+    user_id = msg.from_user.id
+
+    # 重置汇率、费率和佣金为 0
+    try:
+        cursor.execute("""
+        UPDATE settings
+        SET rate = 0, fee_rate = 0, commission_rate = 0
+        WHERE chat_id = %s AND user_id = %s
+        """, (chat_id, user_id))
+        conn.commit()
+        bot.reply_to(msg, "✅ 计算已重启，汇率、费率和佣金已被重置为 0。")
+    except Exception as e:
+        conn.rollback()
+        bot.reply_to(msg, f"❌ 重置失败：{e}")
 
 # —— 入账（记录交易） —— #
 @bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
