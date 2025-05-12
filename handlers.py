@@ -83,7 +83,7 @@ def handle_deposit(msg):
 
     result += (
         f"应下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n"
-        f"已下发：0.0 ({currency}) | 0.0 (USDT)\n"
+        f"已下发：0.0 ({currency}) | 0.00 (USDT)\n"
         f"未下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n"
     )
 
