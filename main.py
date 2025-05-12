@@ -21,7 +21,6 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS settings (
   chat_id         BIGINT NOT NULL,
   user_id         BIGINT NOT NULL,
-  currency        TEXT    NOT NULL,
   rate            DOUBLE PRECISION NOT NULL,
   fee_rate        DOUBLE PRECISION NOT NULL,
   commission_rate DOUBLE PRECISION NOT NULL,
@@ -39,7 +38,6 @@ CREATE TABLE IF NOT EXISTS transactions (
   rate             DOUBLE PRECISION NOT NULL,
   fee_rate         DOUBLE PRECISION NOT NULL,
   commission_rate  DOUBLE PRECISION NOT NULL,
-  currency         TEXT    NOT NULL,
   date             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   message_id       BIGINT,
   amount_after_fee DOUBLE PRECISION,
@@ -72,7 +70,6 @@ def cmd_set_trade(msg):
         return bot.reply_to(msg,
             "请按下面格式发送：\n"
             "设置交易指令\n"
-            "设置货币：RMB\n"
             "设置汇率：0\n"
             "设置费率：0\n"
             "中介佣金：0.0"
@@ -80,7 +77,6 @@ def cmd_set_trade(msg):
 
     # 提取参数
     try:
-        currency = re.search(r'设置货币[:：]\s*([^\s\n]+)', text).group(1)
         rate     = float(re.search(r'设置汇率[:：]\s*([0-9]+(?:\.[0-9]+)?)', text).group(1))
         fee      = float(re.search(r'设置费率[:：]\s*([0-9]+(?:\.[0-9]+)?)', text).group(1))
         comm     = float(re.search(r'中介佣金[:：]\s*([0-9]+(?:\.[0-9]+)?)', text).group(1))
@@ -88,7 +84,6 @@ def cmd_set_trade(msg):
         return bot.reply_to(msg,
             "❌ 参数解析失败，请务必按格式填：\n"
             "设置交易指令\n"
-            "设置货币：RMB\n"
             "设置汇率：0\n"
             "设置费率：0\n"
             "中介佣金：0.0"
@@ -100,14 +95,13 @@ def cmd_set_trade(msg):
     # 写入数据库
     try:
         cursor.execute("""
-        INSERT INTO settings (chat_id, user_id, currency, rate, fee_rate, commission_rate)
-        VALUES (%s,%s,%s,%s,%s,%s)
+        INSERT INTO settings (chat_id, user_id, rate, fee_rate, commission_rate)
+        VALUES (%s,%s,%s,%s,%s)
         ON CONFLICT (chat_id, user_id) DO UPDATE
-          SET currency         = EXCLUDED.currency,
-              rate             = EXCLUDED.rate,
+          SET rate             = EXCLUDED.rate,
               fee_rate         = EXCLUDED.fee_rate,
               commission_rate  = EXCLUDED.commission_rate;
-        """, (chat_id, user_id, currency, rate, fee, comm))
+        """, (chat_id, user_id, rate, fee, comm))
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -116,7 +110,6 @@ def cmd_set_trade(msg):
     # 成功反馈
     bot.reply_to(msg,
         "✅ 设置成功\n"
-        f"设置货币：{currency}\n"
         f"设置汇率：{rate}\n"
         f"设置费率：{fee}\n"
         f"中介佣金：{comm}"
@@ -144,7 +137,6 @@ def handle_deposit(msg):
     amount = float(match[0][0])  # 提取并转换金额
 
     # 获取当前设置的交易参数
-    currency = settings['currency']
     rate = settings['rate']
     fee_rate = settings['fee_rate']
     commission_rate = settings['commission_rate']
@@ -160,8 +152,8 @@ def handle_deposit(msg):
         cursor.execute("""
         INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, 
                                   amount_after_fee, amount_in_base_currency, commission_rmb, commission_usdt)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency,
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'RMB', %s, %s, %s, %s)
+        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, 
               amount_after_fee, amount_in_base_currency, commission_rmb, commission_in_base_currency))
         conn.commit()
     except Exception as e:
@@ -170,15 +162,15 @@ def handle_deposit(msg):
 
     # 返回入账信息
     bot.reply_to(msg, 
-        f"✅ 已入款 +{amount} ({currency})\n"
+        f"✅ 已入款 +{amount} (RMB)\n"
         f"编号：{str(id)}\n"
-        f"{str(id)}. {str(datetime.now().strftime('%H:%M:%S'))} {amount} * {fee_rate / 100} / {rate} = {amount_in_base_currency} {currency} linlin131313\n"
+        f"{str(id)}. {str(datetime.now().strftime('%H:%M:%S'))} {amount} * {fee_rate / 100} / {rate} = {amount_in_base_currency} RMB linlin131313\n"
         f"{str(id)}. {str(datetime.now().strftime('%H:%M:%S'))} {amount} * {commission_rate / 100} = {commission_rmb} 【佣金】\n"
-        f"已入款（{str(id)}笔）：{amount} ({currency})\n"
-        f"总入款金额：{total_amount} ({currency})\n"
+        f"已入款（{str(id)}笔）：{amount} (RMB)\n"
+        f"总入款金额：{total_amount} (RMB)\n"
         f"汇率：{rate}\n"
         f"费率：{fee_rate}%\n"
-        f"佣金：{commission_rmb} ({currency}) | {commission_in_base_currency} (USDT)"
+        f"佣金：{commission_rmb} (RMB) | {commission_in_base_currency} (USDT)"
     )
 
 # 启动轮询
