@@ -68,7 +68,7 @@ def cmd_set_trade(msg):
     # 必须先贴“设置交易指令”
     if '设置交易指令' not in text:
         return bot.reply_to(msg,
-            "❌ 格式错误，请按下面格式发送：\n"
+            "请按下面格式发送：\n"
             "设置交易指令\n"
             "设置货币：RMB\n"
             "设置汇率：0\n"
