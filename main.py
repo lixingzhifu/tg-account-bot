@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   commission_rate  DOUBLE PRECISION NOT NULL,
   currency         TEXT    NOT NULL,
   date             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  message_id       BIGINT
+  message_id       BIGINT,
+  status           TEXT DEFAULT 'pending'  -- 状态字段
 );
 """)
 conn.commit()
@@ -153,40 +154,60 @@ def handle_deposit(msg):
     cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
     total_amount = cursor.fetchone()['sum']
 
-    # 生成返回信息
+    # 生成返回信息，增加空格和格式调整
     result = (
-        f"✅ 已入款 +{amount} ({currency})\n"
-        f"编号：{transaction_id}\n"
+        f"✅ 已入款 +{amount} ({currency})\n\n"
+        f"编号：{transaction_id}\n\n"
         f"{transaction_id}. {time_now} {amount} * {1 - fee_rate / 100} / {rate} = {amount_in_usdt}  {msg.from_user.username}\n"
     )
 
     if commission_rate > 0:
         result += (
-            f"{transaction_id}. {time_now} {amount} * {commission_rate / 100} = {commission_rmb} 【佣金】\n"
+            f"{transaction_id}. {time_now} {amount} * {commission_rate / 100} = {commission_rmb} 【佣金】\n\n"
         )
 
     result += (
-        f"已入款（{transaction_count}笔）：{total_amount} ({currency})\n"
+        f"已入款（{transaction_count}笔）：{total_amount} ({currency})\n\n"
         f"总入款金额：{total_amount} ({currency})\n"
         f"汇率：{rate}\n"
         f"费率：{fee_rate}%\n"
     )
 
     if commission_rate > 0:
-        result += f"佣金：{commission_rmb} ({currency}) | {commission_usdt} USDT\n"
+        result += f"佣金：{commission_rmb} ({currency}) | {commission_usdt} USDT\n\n"
     else:
-        result += "佣金：0.0 (RMB) | 0.0 USDT\n"
+        result += "佣金：0.0 (RMB) | 0.0 USDT\n\n"
 
     result += (
         f"应下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n"
         f"已下发：0.0 ({currency}) | 0.00 (USDT)\n"
-        f"未下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n"
+        f"未下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n\n"
     )
 
     if commission_rate > 0:
         result += f"中介佣金应下发：{commission_rmb} ({currency}) | {commission_usdt} (USDT)\n"
 
     bot.reply_to(msg, result)
+
+# —— 删除订单 —— #
+@bot.message_handler(func=lambda m: re.match(r'^(删除订单|减| -)\d+$', m.text or ''))
+def delete_order(msg):
+    text = msg.text.strip()
+    match = re.match(r'^(删除订单|减| -)(\d+)$', text)
+    if not match:
+        return bot.reply_to(msg, "❌ 无效的删除指令，请输入正确的编号，如：删除订单011 或 -1000。")
+
+    order_id = int(match.group(2))
+    chat_id = msg.chat.id
+    user_id = msg.from_user.id
+
+    try:
+        cursor.execute("DELETE FROM transactions WHERE chat_id = %s AND user_id = %s AND id = %s", (chat_id, user_id, order_id))
+        conn.commit()
+        bot.reply_to(msg, f"✅ 删除订单成功，编号：{order_id}")
+    except Exception as e:
+        conn.rollback()
+        bot.reply_to(msg, f"❌ 删除订单失败：{e}")
 
 # —— 启动轮询 —— #
 if __name__ == '__main__':
