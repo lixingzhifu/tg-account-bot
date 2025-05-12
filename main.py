@@ -257,3 +257,7 @@ def handle_withdrawal(msg):
 
     bot.reply_to(msg, f"当前剩余应下发金额：{remaining_to_send} RMB")
 
+# —— 启动轮询 —— #
+if __name__ == '__main__':
+    bot.remove_webhook()  # 确保没有 webhook
+    bot.infinity_polling()  # 永久轮询
