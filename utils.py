@@ -1,79 +1,74 @@
 # utils.py
+
+import re
 import math
-from datetime import datetime, timedelta
+from datetime import datetime
+
+def parse_trade_text(text: str):
+    """
+    解析“设置交易指令”那段多行文本，
+    返回 (currency, rate, fee_rate, commission_rate, errors_list)
+    """
+    currency = None
+    rate = None
+    fee = None
+    com = None
+    errors = []
+
+    # 按行拆
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("设置货币："):
+            currency = line.replace("设置货币：", "").strip()
+        elif line.startswith("设置汇率："):
+            try:
+                rate = float(line.replace("设置汇率：", "").strip())
+            except:
+                errors.append(f"汇率不是数字：{line}")
+        elif line.startswith("设置费率："):
+            try:
+                fee = float(line.replace("设置费率：", "").strip())
+            except:
+                errors.append(f"费率不是数字：{line}")
+        elif line.startswith("中介佣金："):
+            try:
+                com = float(line.replace("中介佣金：", "").strip())
+            except:
+                errors.append(f"佣金不是数字：{line}")
+
+    # 至少需要汇率
+    if rate is None:
+        errors.append("缺少“设置汇率：数字”")
+
+    return currency, rate, fee, com, errors
+
+
+def parse_amount_text(text: str):
+    """
+    从“+1000” / “入1000” / “入笔1000”字样中提取金额
+    返回 (None, amount) 或 (None, None) 代表不匹配
+    """
+    m = re.search(r"([+]?|入笔|入)\s*(\d+(\.\d+)?)", text)
+    if not m:
+        return None, None
+    amt = float(m.group(2))
+    return None, amt
+
+
+def human_now():
+    """
+    返回 （本地时间字符串, UTC datetime 对象）
+    local_str 用于直接展示，dt 用于存库
+    """
+    # 马来西亚是 UTC+8
+    dt_utc = datetime.utcnow()
+    local = (dt_utc.hour + 8) % 24
+    hms = f"{local:02d}:{dt_utc.minute:02d}:{dt_utc.second:02d}"
+    return hms, dt_utc
+
 
 def ceil2(x: float) -> float:
-    """保留两位小数并向上"""
-    return math.ceil(x * 100) / 100
-
-def now_ml() -> datetime:
-    """当前马来西亚时间（UTC+8）"""
-    return datetime.utcnow() + timedelta(hours=8)
-
-def format_time(dt: datetime) -> str:
-    """把 UTC dt 转为 +8 后格式化；NULL 时返回当前时间"""
-    if not dt:
-        dt = now_ml()
-    return (dt + timedelta(hours=8)).strftime("%H:%M:%S")
-
-def get_settings(chat_id: int, user_id: int):
-    """从 settings 取当前配置，没配置时返回 rate=0"""
-    from db import cursor
-    cursor.execute("""
-        SELECT currency, rate, fee_rate, commission_rate
-        FROM settings
-        WHERE chat_id=%s AND user_id=%s
-    """, (chat_id, user_id))
-    r = cursor.fetchone()
-    if r:
-        return r["currency"], r["rate"], r["fee_rate"], r["commission_rate"]
-    return None, 0.0, 0.0, 0.0
-
-def show_summary(chat_id: int, user_id: int) -> str:
-    """拼接最新一笔和累计汇总的文本"""
-    from db import cursor
-    # 1. 最新一笔
-    cursor.execute("""
-        SELECT date, amount, rate, fee_rate, commission_rate, currency
-        FROM transactions
-        WHERE chat_id=%s AND user_id=%s
-        ORDER BY id DESC
-        LIMIT 1
-    """, (chat_id, user_id))
-    r = cursor.fetchone()
-    t = format_time(r["date"])
-    out_usdt = ceil2(r["amount"] * (1 - r["fee_rate"]/100) / r["rate"])
-    comm_amt = ceil2(r["amount"] * (r["commission_rate"]/100))
-
-    # 2. 累计笔数/金额
-    cursor.execute("""
-        SELECT COUNT(*) AS cnt, SUM(amount) AS total_rmb
-        FROM transactions
-        WHERE chat_id=%s AND user_id=%s
-    """, (chat_id, user_id))
-    s = cursor.fetchone()
-    cnt   = s["cnt"] or 0
-    total = ceil2(s["total_rmb"] or 0)
-
-    # 3. 累计下发 USDT
-    cursor.execute("""
-        SELECT SUM(amount*(1 - fee_rate/100)/rate) AS send_sum
-        FROM transactions
-        WHERE chat_id=%s AND user_id=%s
-    """, (chat_id, user_id))
-    sp = cursor.fetchone()
-    send_sum = ceil2(sp["send_sum"] or 0)
-
-    return (
-        f"{t} {r['amount']}×{1-r['fee_rate']/100:.2f}/{r['rate']} = {out_usdt} (USDT)\n"
-        f"{t} {r['amount']}×{r['commission_rate']/100:.2f} = {comm_amt}【佣金】\n\n"
-        f"已入款（{cnt}笔）：{total} (RMB)\n"
-        f"总入款金额：{total} (RMB)\n"
-        f"汇率：{r['rate']}\n"
-        f"费率：{r['fee_rate']}%\n"
-        f"佣金：{r['commission_rate']}%\n\n"
-        f"应下发：{ceil2(total*(1-r['fee_rate']/100))}(RMB) | {send_sum}(USDT)\n"
-        f"已下发：0.0(RMB) | 0.0(USDT)\n"
-        f"未下发：{ceil2(total*(1-r['fee_rate']/100))}(RMB) | {send_sum}(USDT)\n\n"
-        f"中介佣金应下发：{comm_amt}(RMB) | {ceil2(comm_amt/r['rate'])}(USDT)"
-    )
+    """
+    向上保留两位小数
+    """
+    return math.ceil(x * 100) / 100.0
