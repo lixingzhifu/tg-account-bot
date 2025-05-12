@@ -209,6 +209,54 @@ def delete_order(msg):
         conn.rollback()
         bot.reply_to(msg, f"❌ 删除订单失败：{e}")
 
+# —— 下发功能 —— #
+@bot.message_handler(func=lambda m: re.match(r'^下发(\d+(\.\d+)?)$', m.text or ''))
+def handle_withdrawal(msg):
+    # 提取下发金额
+    match = re.match(r'^下发(\d+(\.\d+)?)$', msg.text)
+    if not match:
+        return bot.reply_to(msg, "❌ 无效的下发格式。请输入有效的金额，示例：下发1000")
+
+    withdrawal_amount = float(match.group(1))
+
+    chat_id = msg.chat.id
+    user_id = msg.from_user.id
+
+    # 检查用户是否有设置交易
+    cursor.execute("SELECT * FROM settings WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+    settings = cursor.fetchone()
+    if not settings:
+        return bot.reply_to(msg, "❌ 请先“设置交易”并填写汇率，才能下发。")
+
+    # 获取当前的应下发金额
+    cursor.execute("""
+        SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s AND status = 'pending'
+    """, (chat_id, user_id))
+    total_amount_to_send = cursor.fetchone()['sum']
+
+    if withdrawal_amount > total_amount_to_send:
+        return bot.reply_to(msg, f"❌ 你请求的下发金额 ({withdrawal_amount} RMB) 超过了应下发金额 ({total_amount_to_send} RMB)。")
+
+    # 更新应下发和已下发金额
+    cursor.execute("""
+        UPDATE transactions
+        SET status = 'sent'
+        WHERE chat_id = %s AND user_id = %s AND status = 'pending'
+        LIMIT 1
+    """, (chat_id, user_id))
+    conn.commit()
+
+    # 反馈下发信息
+    bot.reply_to(msg, f"✅ 已成功下发 {withdrawal_amount} (RMB)\n已更新应下发和未下发金额。")
+
+    # 更新后重新显示交易状态
+    cursor.execute("""
+        SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s AND status = 'pending'
+    """, (chat_id, user_id))
+    remaining_to_send = cursor.fetchone()['sum']
+
+    bot.reply_to(msg, f"当前剩余应下发金额：{remaining_to_send} RMB")
+
 # —— 启动轮询 —— #
 if __name__ == '__main__':
     bot.remove_webhook()  # 确保没有 webhook
