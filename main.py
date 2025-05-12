@@ -149,6 +149,10 @@ def handle_deposit(msg):
         conn.rollback()
         return bot.reply_to(msg, f"❌ 存储失败：{e}")
 
+    # 获取已入款总数
+    cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+    total_amount = cursor.fetchone()['sum']
+
     # 生成返回信息
     result = (
         f"✅ 已入款 +{amount} ({currency})\n"
@@ -162,8 +166,8 @@ def handle_deposit(msg):
         )
 
     result += (
-        f"已入款（{transaction_count}笔）：{amount} ({currency})\n"
-        f"总入款金额：{amount} ({currency})\n"
+        f"已入款（{transaction_count}笔）：{total_amount} ({currency})\n"
+        f"总入款金额：{total_amount} ({currency})\n"
         f"汇率：{rate}\n"
         f"费率：{fee_rate}%\n"
     )
