@@ -84,7 +84,7 @@ def save_settings(message):
             bot.register_next_step_handler(message, save_settings)
             return
 
-        # 使用正则表达式支持 : 和 ：
+        # 使用正则表达式支持 : 和 ：，解析出汇率、费率、佣金
         exchange_rate_str = re.search(r'设置汇率[:：]\s*(\d+(\.\d+)?)', settings[1])
         fee_rate_str = re.search(r'设置费率[:：]\s*(\d+(\.\d+)?)', settings[2])
         commission_rate_str = re.search(r'中介佣金[:：]\s*(\d+(\.\d+)?)', settings[3])
