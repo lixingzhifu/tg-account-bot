@@ -79,14 +79,14 @@ def save_settings(message):
         # 获取用户输入的设置值
         settings = message.text.split("\n")
         
-        if len(settings) != 4:  # 检查是否包含4个元素
+        if len(settings) != 4:  # 确保包含4行
             bot.send_message(message.chat.id, "格式错误，请按照以下格式重新输入：\n\n"
                                               "设置交易指令\n设置汇率：0\n设置费率：0\n中介佣金：0.0")
             bot.register_next_step_handler(message, save_settings)
             return
 
         # 解析输入内容
-        exchange_rate = float(settings[1].split("：")[1].strip())
+        exchange_rate = float(settings[1].split("：")[1].strip())  # 去除空格和特殊字符
         fee_rate = float(settings[2].split("：")[1].strip())
         commission_rate = float(settings[3].split("：")[1].strip())
 
