@@ -7,8 +7,11 @@ import re
 from datetime import datetime
 import urllib.parse
 
-# 连接 PostgreSQL 数据库
+# 环境变量
 DATABASE_URL = os.getenv('DATABASE_URL')
+TOKEN = os.getenv('TOKEN')
+
+# 数据库连接
 parsed_url = urllib.parse.urlparse(DATABASE_URL)
 conn = psycopg2.connect(
     database=parsed_url.path[1:],  # Remove leading slash
@@ -20,7 +23,6 @@ conn = psycopg2.connect(
 cursor = conn.cursor(cursor_factory=RealDictCursor)
 
 # 设置机器人
-TOKEN = os.getenv('TOKEN')
 bot = telebot.TeleBot(TOKEN)
 
 # 初始化数据库
@@ -63,8 +65,8 @@ def send_welcome(message):
     markup.add(types.KeyboardButton("指令大全"), types.KeyboardButton("客服帮助"))
     bot.send_message(message.chat.id, "请选择：", reply_markup=markup)
 
-# /设置交易 触发
-@bot.message_handler(func=lambda message: message.text == "设置交易")
+# 设置交易指令（正确格式）
+@bot.message_handler(func=lambda message: message.text.startswith("设置交易指令"))
 def set_transaction(message):
     bot.send_message(message.chat.id, "请输入设置交易指令：设置汇率、费率、佣金，例如：设置汇率：9 设置费率：2 中介佣金：0.5")
     bot.register_next_step_handler(message, save_settings)
@@ -73,9 +75,9 @@ def save_settings(message):
     try:
         # 获取用户输入的设置值
         settings = message.text.split(" ")
-        exchange_rate = float(settings[0].split("：")[1])
-        fee_rate = float(settings[1].split("：")[1])
-        commission_rate = float(settings[2].split("：")[1])
+        exchange_rate = float(settings[1].split("：")[1])
+        fee_rate = float(settings[2].split("：")[1])
+        commission_rate = float(settings[3].split("：")[1])
 
         # 存储到数据库
         cursor.execute("INSERT INTO settings (chat_id, user_id, exchange_rate, fee_rate, commission_rate, currency) VALUES (%s, %s, %s, %s, %s, %s)",
@@ -121,6 +123,19 @@ def record_transaction(message):
     except Exception as e:
         bot.send_message(message.chat.id, "交易失败，请重试。")
 
+# /删除入款 触发
+@bot.message_handler(func=lambda message: message.text.startswith("删除"))
+def delete_transaction(message):
+    try:
+        transaction_id = int(message.text.split("删除")[1].strip())
+
+        cursor.execute("DELETE FROM transactions WHERE message_id = %s", (transaction_id,))
+        conn.commit()
+
+        bot.send_message(message.chat.id, f"已删除编号 {transaction_id} 的交易记录。")
+    except Exception as e:
+        bot.send_message(message.chat.id, "无法删除记录，请检查编号或重试。")
+
 # /显示账单 触发
 @bot.message_handler(func=lambda message: message.text == "显示账单")
 def show_bill(message):
@@ -136,6 +151,26 @@ def show_bill(message):
         response += f"编号：{transaction['message_id']} | 金额：{transaction['amount']} | 日期：{transaction['date']} \n"
 
     bot.send_message(message.chat.id, response)
+
+# /指令大全 触发
+@bot.message_handler(func=lambda message: message.text == "指令大全")
+def show_commands(message):
+    commands = """
+    /start - 启动机器人
+    设置交易指令 - 设置汇率、费率、佣金
+    /入笔 + 数字 - 记录交易
+    删除 + 数字 - 删除指定编号的交易
+    /显示账单 - 查看今日账单
+    """
+    bot.send_message(message.chat.id, commands)
+
+# /reset 触发
+@bot.message_handler(func=lambda message: message.text == "/reset")
+def reset_data(message):
+    cursor.execute("DELETE FROM transactions WHERE chat_id=%s AND user_id=%s", (message.chat.id, message.from_user.id))
+    cursor.execute("DELETE FROM settings WHERE chat_id=%s AND user_id=%s", (message.chat.id, message.from_user.id))
+    conn.commit()
+    bot.send_message(message.chat.id, "已重置您的所有数据。")
 
 # 启动机器人
 if __name__ == '__main__':
