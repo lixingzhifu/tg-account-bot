@@ -76,19 +76,31 @@ def ask_for_settings(message):
 # 保存设置
 def save_settings(message):
     try:
-        # 获取用户输入的设置值
-        settings = message.text.split("\n")
+        # 清理输入，去除多余的空格和换行符
+        settings = message.text.strip().split("\n")
         
-        if len(settings) != 4:  # 确保包含4行
+        # 确保输入包含4行
+        if len(settings) != 4:
             bot.send_message(message.chat.id, "格式错误，请按照以下格式重新输入：\n\n"
                                               "设置交易指令\n设置汇率：0\n设置费率：0\n中介佣金：0.0")
             bot.register_next_step_handler(message, save_settings)
             return
 
-        # 解析输入内容
-        exchange_rate = float(settings[1].split("：")[1].strip())  # 去除空格和特殊字符
-        fee_rate = float(settings[2].split("：")[1].strip())
-        commission_rate = float(settings[3].split("：")[1].strip())
+        # 解析每一行
+        exchange_rate_str = settings[1].split("：")[1].strip()
+        fee_rate_str = settings[2].split("：")[1].strip()
+        commission_rate_str = settings[3].split("：")[1].strip()
+
+        # 确保每个字段是有效的数字
+        exchange_rate = float(exchange_rate_str) if exchange_rate_str.replace('.', '', 1).isdigit() else None
+        fee_rate = float(fee_rate_str) if fee_rate_str.replace('.', '', 1).isdigit() else None
+        commission_rate = float(commission_rate_str) if commission_rate_str.replace('.', '', 1).isdigit() else None
+
+        # 如果有任何无效的输入，提示用户重新设置
+        if None in [exchange_rate, fee_rate, commission_rate]:
+            bot.send_message(message.chat.id, "无效输入，请确保每个设置项都是数字，重新输入！")
+            bot.register_next_step_handler(message, save_settings)
+            return
 
         # 存储到数据库
         cursor.execute("INSERT INTO settings (chat_id, user_id, exchange_rate, fee_rate, commission_rate, currency) VALUES (%s, %s, %s, %s, %s, %s)",
