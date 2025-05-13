@@ -1,17 +1,20 @@
 import telebot
 import os
+from flask import Flask, request
 import psycopg2
-from psycopg2.extras import RealDictCursor
-from telebot import types
-import re
-from datetime import datetime
 import urllib.parse
 
-# 环境变量
-DATABASE_URL = os.getenv('DATABASE_URL')
+# 获取 Telegram Token 和数据库配置
 TOKEN = os.getenv('TOKEN')
+DATABASE_URL = os.getenv('DATABASE_URL')
 
-# 数据库连接
+# 初始化 Flask 应用
+app = Flask(__name__)
+
+# 创建 TeleBot 实例
+bot = telebot.TeleBot(TOKEN)
+
+# 数据库连接配置
 parsed_url = urllib.parse.urlparse(DATABASE_URL)
 conn = psycopg2.connect(
     database=parsed_url.path[1:],  # Remove leading slash
@@ -20,10 +23,7 @@ conn = psycopg2.connect(
     host=parsed_url.hostname,
     port=parsed_url.port
 )
-cursor = conn.cursor(cursor_factory=RealDictCursor)
-
-# 设置机器人
-bot = telebot.TeleBot(TOKEN)
+cursor = conn.cursor()
 
 # 初始化数据库
 def init_db():
@@ -54,6 +54,24 @@ def init_db():
         );
     ''')
     conn.commit()
+
+# Webhook 端点
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    json_str = request.get_data().decode('UTF-8')
+    update = telebot.types.Update.de_json(json_str)
+    bot.process_new_updates([update])
+    return 'OK'
+
+# 设置 Webhook
+def set_webhook():
+    bot.remove_webhook()  # 清除旧的 Webhook
+    bot.set_webhook(url='https://yourdomain.com/webhook')  # 设置新的 Webhook 地址（替换为你的域名）
+
+# 启动 Webhook 和 Flask 应用
+@app.route('/')
+def home():
+    return "Bot is working!"
 
 # /start 触发
 @bot.message_handler(commands=['start'])
@@ -198,7 +216,7 @@ def reset_data(message):
     conn.commit()
     bot.send_message(message.chat.id, "已重置您的所有数据。")
 
-# 启动机器人
+# 启动 Webhook 和 Flask 应用
 if __name__ == '__main__':
-    init_db()  # 初始化数据库
-    bot.polling(none_stop=True)
+    set_webhook()  # 配置 Webhook
+    app.run(host="0.0.0.0", port=5000)  # 启动 Flask 应用
