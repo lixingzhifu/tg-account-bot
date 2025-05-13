@@ -63,6 +63,7 @@ def send_welcome(message):
     markup = types.ReplyKeyboardMarkup(row_width=2)
     markup.add(types.KeyboardButton("设置交易"), types.KeyboardButton("显示账单"))
     markup.add(types.KeyboardButton("指令大全"), types.KeyboardButton("客服帮助"))
+    markup.add(types.KeyboardButton("计算重启"), types.KeyboardButton("定制机器人"))
     bot.send_message(message.chat.id, "请选择：", reply_markup=markup)
 
 # 设置交易指令（正确格式）
@@ -161,6 +162,9 @@ def show_commands(message):
     /入笔 + 数字 - 记录交易
     删除 + 数字 - 删除指定编号的交易
     /显示账单 - 查看今日账单
+    /指令大全 - 查看所有指令
+    /客服帮助 - 获取帮助
+    /计算重启 - 重置所有数据
     """
     bot.send_message(message.chat.id, commands)
 
