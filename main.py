@@ -68,7 +68,7 @@ def send_welcome(message):
 @bot.message_handler(func=lambda message: message.text == "设置交易")
 def ask_for_settings(message):
     bot.send_message(message.chat.id, "请按下面格式发送：\n\n"
-                                      "设置交易指令\n设置汇率：0\n设置费率：0\n中介佣金：0.0")
+                                      "设置交易指令\n设置汇率:0\n设置费率:0\n中介佣金:0.0")
     bot.register_next_step_handler(message, save_settings)
 
 # 保存设置
@@ -80,7 +80,7 @@ def save_settings(message):
         # 确保输入包含4行
         if len(settings) != 4:
             bot.send_message(message.chat.id, "格式错误，请按照以下格式重新输入：\n\n"
-                                              "设置交易指令\n设置汇率：0\n设置费率：0\n中介佣金：0.0")
+                                              "设置交易指令\n设置汇率:0\n设置费率:0\n中介佣金:0.0")
             bot.register_next_step_handler(message, save_settings)
             return
 
@@ -199,4 +199,4 @@ def reset_data(message):
 # 启动轮询
 if __name__ == '__main__':
     init_db()  # 初始化数据库
-    bot.polling(none_stop=True)  # 启动轮询，保持 bot 运行
+    bot.infinity_polling()  # 启动轮询，保持 bot 运行
