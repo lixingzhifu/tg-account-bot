@@ -84,21 +84,21 @@ def save_settings(message):
             bot.register_next_step_handler(message, save_settings)
             return
 
-        # 解析每一行
-        exchange_rate_str = settings[1].split("：")[1].strip()
-        fee_rate_str = settings[2].split("：")[1].strip()
-        commission_rate_str = settings[3].split("：")[1].strip()
+        # 使用正则表达式支持 : 和 ：
+        exchange_rate_str = re.search(r'设置汇率[:：]\s*(\d+(\.\d+)?)', settings[1])
+        fee_rate_str = re.search(r'设置费率[:：]\s*(\d+(\.\d+)?)', settings[2])
+        commission_rate_str = re.search(r'中介佣金[:：]\s*(\d+(\.\d+)?)', settings[3])
 
-        # 确保每个字段是有效的数字
-        exchange_rate = float(exchange_rate_str) if exchange_rate_str.replace('.', '', 1).isdigit() else None
-        fee_rate = float(fee_rate_str) if fee_rate_str.replace('.', '', 1).isdigit() else None
-        commission_rate = float(commission_rate_str) if commission_rate_str.replace('.', '', 1).isdigit() else None
-
-        # 如果有任何无效的输入，提示用户重新设置
-        if None in [exchange_rate, fee_rate, commission_rate]:
-            bot.send_message(message.chat.id, "无效输入，请确保每个设置项都是数字，重新输入！")
+        # 如果没有匹配到正确格式，返回错误提示
+        if not exchange_rate_str or not fee_rate_str or not commission_rate_str:
+            bot.send_message(message.chat.id, "格式不正确，请按指定格式重新输入！")
             bot.register_next_step_handler(message, save_settings)
             return
+
+        # 解析出汇率、费率、佣金
+        exchange_rate = float(exchange_rate_str.group(1))
+        fee_rate = float(fee_rate_str.group(1))
+        commission_rate = float(commission_rate_str.group(1))
 
         # 存储到数据库
         cursor.execute("INSERT INTO settings (chat_id, user_id, exchange_rate, fee_rate, commission_rate, currency) VALUES (%s, %s, %s, %s, %s, %s)",
