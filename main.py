@@ -1,184 +1,143 @@
+import telebot
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from telebot import TeleBot, types
+from telebot import types
+import re
 from datetime import datetime
+import urllib.parse
 
-# —— 环境变量 —— #
-TOKEN = os.getenv("TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
+# 连接 PostgreSQL 数据库
+DATABASE_URL = os.getenv('DATABASE_URL')
+parsed_url = urllib.parse.urlparse(DATABASE_URL)
+conn = psycopg2.connect(
+    database=parsed_url.path[1:],  # Remove leading slash
+    user=parsed_url.username,
+    password=parsed_url.password,
+    host=parsed_url.hostname,
+    port=parsed_url.port
+)
+cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-# —— Bot 实例 —— #
-bot = TeleBot(TOKEN)
+# 设置机器人
+TOKEN = os.getenv('TOKEN')
+bot = telebot.TeleBot(TOKEN)
 
-# —— 数据库连接 —— #
-conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-cursor = conn.cursor()
+# 初始化数据库
+def init_db():
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS transactions (
+            id SERIAL PRIMARY KEY,
+            chat_id BIGINT,
+            user_id BIGINT,
+            name VARCHAR(255),
+            amount FLOAT NOT NULL,
+            rate FLOAT,
+            fee_rate FLOAT,
+            commission_rate FLOAT,
+            currency VARCHAR(10),
+            date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            message_id BIGINT
+        );
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            id SERIAL PRIMARY KEY,
+            chat_id BIGINT,
+            user_id BIGINT,
+            exchange_rate FLOAT,
+            fee_rate FLOAT,
+            commission_rate FLOAT,
+            currency VARCHAR(10)
+        );
+    ''')
+    conn.commit()
 
-# —— 初始化建表（只会创建，不会覆盖） —— #
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS settings (
-  chat_id         BIGINT NOT NULL,
-  user_id         BIGINT NOT NULL,
-  rate            DOUBLE PRECISION NOT NULL,
-  fee_rate        DOUBLE PRECISION NOT NULL,
-  commission_rate DOUBLE PRECISION NOT NULL,
-  PRIMARY KEY(chat_id, user_id)
-);
-""")
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS transactions (
-  id               SERIAL PRIMARY KEY,
-  chat_id          BIGINT NOT NULL,
-  user_id          BIGINT NOT NULL,
-  amount           DOUBLE PRECISION NOT NULL,
-  rate             DOUBLE PRECISION NOT NULL,
-  fee_rate         DOUBLE PRECISION NOT NULL,
-  commission_rate  DOUBLE PRECISION NOT NULL,
-  date             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  message_id       BIGINT
-);
-""")
-conn.commit()
-
-# —— /start & “记账” 命令 —— #
+# /start 触发
 @bot.message_handler(commands=['start'])
-def cmd_start(msg):
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(types.KeyboardButton('/trade'), types.KeyboardButton('设置交易'))
-    bot.reply_to(msg,
-        "欢迎使用 LX 记账机器人 ✅\n"
-        "请选择菜单：",
-        reply_markup=kb
-    )
+def send_welcome(message):
+    bot.reply_to(message, "欢迎使用 LX 记账机器人 ✅\n请选择菜单选项：")
+    # 构建菜单
+    markup = types.ReplyKeyboardMarkup(row_width=2)
+    markup.add(types.KeyboardButton("设置交易"), types.KeyboardButton("显示账单"))
+    markup.add(types.KeyboardButton("指令大全"), types.KeyboardButton("客服帮助"))
+    bot.send_message(message.chat.id, "请选择：", reply_markup=markup)
 
-@bot.message_handler(func=lambda m: m.text == '记账')
-def cmd_start_alias(msg):
-    cmd_start(msg)
+# /设置交易 触发
+@bot.message_handler(func=lambda message: message.text == "设置交易")
+def set_transaction(message):
+    bot.send_message(message.chat.id, "请输入设置交易指令：设置汇率、费率、佣金，例如：设置汇率：9 设置费率：2 中介佣金：0.5")
+    bot.register_next_step_handler(message, save_settings)
 
-# —— 设置交易配置 —— #
-@bot.message_handler(func=lambda m: re.match(r'^(/trade|设置交易)', m.text or ''))
-def cmd_set_trade(msg):
-    text = msg.text.strip()
-    if '设置交易指令' not in text:
-        return bot.reply_to(msg,
-            "请按下面格式发送：\n"
-            "设置交易指令\n"
-            "设置汇率：0\n"
-            "设置费率：0\n"
-            "中介佣金：0.0"
-        )
-
+def save_settings(message):
     try:
-        rate     = float(re.search(r'设置汇率[:：]\s*([0-9]+(?:\.[0-9]+)?)', text).group(1))
-        fee      = float(re.search(r'设置费率[:：]\s*([0-9]+(?:\.[0-9]+)?)', text).group(1))
-        comm     = float(re.search(r'中介佣金[:：]\s*([0-9]+(?:\.[0-9]+)?)', text).group(1))
-    except Exception:
-        return bot.reply_to(msg,
-            "❌ 参数解析失败，请务必按格式填：\n"
-            "设置交易指令\n"
-            "设置汇率：0\n"
-            "设置费率：0\n"
-            "中介佣金：0.0"
-        )
+        # 获取用户输入的设置值
+        settings = message.text.split(" ")
+        exchange_rate = float(settings[0].split("：")[1])
+        fee_rate = float(settings[1].split("：")[1])
+        commission_rate = float(settings[2].split("：")[1])
 
-    chat_id = msg.chat.id
-    user_id = msg.from_user.id
-
-    try:
-        cursor.execute("""
-        INSERT INTO settings (chat_id, user_id, rate, fee_rate, commission_rate)
-        VALUES (%s,%s,%s,%s,%s)
-        ON CONFLICT (chat_id, user_id) DO UPDATE
-          SET rate             = EXCLUDED.rate,
-              fee_rate         = EXCLUDED.fee_rate,
-              commission_rate  = EXCLUDED.commission_rate;
-        """, (chat_id, user_id, rate, fee, comm))
+        # 存储到数据库
+        cursor.execute("INSERT INTO settings (chat_id, user_id, exchange_rate, fee_rate, commission_rate, currency) VALUES (%s, %s, %s, %s, %s, %s)",
+                       (message.chat.id, message.from_user.id, exchange_rate, fee_rate, commission_rate, "RMB"))
         conn.commit()
+
+        bot.send_message(message.chat.id, f"✅ 设置成功\n设置汇率：{exchange_rate}\n设置费率：{fee_rate}\n中介佣金：{commission_rate}")
     except Exception as e:
-        conn.rollback()
-        return bot.reply_to(msg, f"❌ 存储失败：{e}")
+        bot.send_message(message.chat.id, "输入有误，请重新设置！")
+        bot.register_next_step_handler(message, save_settings)
 
-    bot.reply_to(msg,
-        "✅ 设置成功\n"
-        f"设置汇率：{rate}\n"
-        f"设置费率：{fee}\n"
-        f"中介佣金：{comm}"
-    )
-
-# —— 入账（记录交易） —— #
-@bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
-def handle_deposit(msg):
-    chat_id = msg.chat.id
-    user_id = msg.from_user.id
-
-    cursor.execute("SELECT * FROM settings WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-    settings = cursor.fetchone()
-    if not settings:
-        return bot.reply_to(msg, "❌ 请先“设置交易”并填写汇率，才能入账。")
-
-    match = re.findall(r'[\+入笔]*([0-9]+(\.\d+)?)', msg.text)
-    if not match:
-        return bot.reply_to(msg, "❌ 无效的入账格式。请输入有效的金额，示例：+1000 或 入1000")
-
-    amount = float(match[0][0])
-
-    rate = settings['rate']
-    fee_rate = settings['fee_rate']
-    commission_rate = settings['commission_rate']
-
-    amount_after_fee = amount * (1 - fee_rate / 100)
-    commission_rmb = round(amount * (commission_rate / 100), 2)
-
-    # 计算编号
-    cursor.execute("SELECT COUNT(*) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-    count = cursor.fetchone()["count"]
-    transaction_id = count + 1
-
+# /入笔 触发
+@bot.message_handler(func=lambda message: re.match(r'^\+?\d+(\.\d+)?$', message.text))
+def record_transaction(message):
     try:
-        cursor.execute("""
-        INSERT INTO transactions (chat_id, user_id, amount, rate, fee_rate, commission_rate)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        """, (chat_id, user_id, amount, rate, fee_rate, commission_rate))
+        # 解析金额
+        amount = float(message.text)
+
+        # 获取设置
+        cursor.execute("SELECT * FROM settings WHERE chat_id=%s AND user_id=%s ORDER BY id DESC LIMIT 1", (message.chat.id, message.from_user.id))
+        settings = cursor.fetchone()
+
+        if not settings:
+            bot.send_message(message.chat.id, "请先设置交易参数。")
+            return
+
+        rate = settings['exchange_rate']
+        fee_rate = settings['fee_rate']
+        commission_rate = settings['commission_rate']
+
+        # 计算应下发金额和佣金
+        deducted_amount = amount * (1 - fee_rate / 100)
+        commission = deducted_amount * commission_rate / 100
+        final_amount = deducted_amount - commission
+
+        # 插入交易记录
+        cursor.execute("INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                       (message.chat.id, message.from_user.id, message.from_user.username, amount, rate, fee_rate, commission_rate, "RMB", message.message_id))
         conn.commit()
+
+        bot.send_message(message.chat.id, f"今日入笔（1笔）\n✅ 已入款 +{amount} (RMB)\n编号：{message.message_id}\n"
+                                         f"汇率：{rate}\n费率：{fee_rate}%\n佣金：{commission_rate}%\n应下发：{final_amount} (USDT)\n")
     except Exception as e:
-        conn.rollback()
-        return bot.reply_to(msg, f"❌ 存储失败：{e}")
+        bot.send_message(message.chat.id, "交易失败，请重试。")
 
-    bot.reply_to(msg,
-        f"今日入笔（{transaction_id}笔）\n"
-        f"✅ 已入款 +{amount} (RMB)\n"
-        f"编号：{transaction_id}\n"
-        f"{transaction_id}. {amount} * (1 - {fee_rate} / 100) = {amount_after_fee} (RMB)\n"
-        f"佣金：{commission_rmb} (RMB)"
-    )
+# /显示账单 触发
+@bot.message_handler(func=lambda message: message.text == "显示账单")
+def show_bill(message):
+    cursor.execute("SELECT * FROM transactions WHERE chat_id=%s AND user_id=%s ORDER BY date DESC", (message.chat.id, message.from_user.id))
+    transactions = cursor.fetchall()
 
-# —— 删除入笔 —— #
-@bot.message_handler(func=lambda m: re.match(r'^[\-\+入笔]*\d+(\.\d+)?$', m.text or ''))
-def handle_delete_deposit(msg):
-    chat_id = msg.chat.id
-    user_id = msg.from_user.id
+    if not transactions:
+        bot.send_message(message.chat.id, "今天没有交易记录。")
+        return
 
-    match = re.findall(r'[\-\+入笔]*([0-9]+(\.\d+)?)', msg.text)
-    if not match:
-        return bot.reply_to(msg, "❌ 无效的删除入笔格式。请输入有效的金额，示例：-1000 或 撤销入款")
+    response = "今日账单：\n"
+    for transaction in transactions:
+        response += f"编号：{transaction['message_id']} | 金额：{transaction['amount']} | 日期：{transaction['date']} \n"
 
-    amount = float(match[0][0])
+    bot.send_message(message.chat.id, response)
 
-    cursor.execute("SELECT * FROM transactions WHERE chat_id = %s AND user_id = %s ORDER BY date DESC LIMIT 1", (chat_id, user_id))
-    last_transaction = cursor.fetchone()
-    if not last_transaction:
-        return bot.reply_to(msg, "❌ 没有入账记录。")
-
-    try:
-        cursor.execute("DELETE FROM transactions WHERE chat_id = %s AND user_id = %s AND amount = %s ORDER BY date DESC LIMIT 1", (chat_id, user_id, amount))
-        conn.commit()
-        bot.reply_to(msg, f"✅ 已删除编号：{last_transaction['id']}")
-    except Exception as e:
-        conn.rollback()
-        return bot.reply_to(msg, f"❌ 删除失败：{e}")
-
-# —— 启动轮询 —— #
+# 启动机器人
 if __name__ == '__main__':
-    bot.remove_webhook()      
-    bot.infinity_polling()   
+    init_db()  # 初始化数据库
+    bot.polling(none_stop=True)
