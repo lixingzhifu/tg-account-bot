@@ -1,8 +1,8 @@
 import os
-import re
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from telebot import TeleBot, types
+from datetime import datetime
 
 # —— 环境变量 —— #
 TOKEN = os.getenv("TOKEN")
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 """)
 conn.commit()
 
-# —— /start & "记账" 命令 —— #
+# —— /start & “记账” 命令 —— #
 @bot.message_handler(commands=['start'])
 def cmd_start(msg):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -130,6 +130,11 @@ def handle_deposit(msg):
     amount_after_fee = amount * (1 - fee_rate / 100)
     commission_rmb = round(amount * (commission_rate / 100), 2)
 
+    # 计算编号
+    cursor.execute("SELECT COUNT(*) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+    count = cursor.fetchone()["count"]
+    transaction_id = count + 1
+
     try:
         cursor.execute("""
         INSERT INTO transactions (chat_id, user_id, amount, rate, fee_rate, commission_rate)
@@ -141,11 +146,37 @@ def handle_deposit(msg):
         return bot.reply_to(msg, f"❌ 存储失败：{e}")
 
     bot.reply_to(msg,
+        f"今日入笔（{transaction_id}笔）\n"
         f"✅ 已入款 +{amount} (RMB)\n"
-        f"编号：{msg.message_id}\n"
-        f"{msg.message_id}. {amount} * (1 - {fee_rate} / 100) = {amount_after_fee} (RMB)\n"
+        f"编号：{transaction_id}\n"
+        f"{transaction_id}. {amount} * (1 - {fee_rate} / 100) = {amount_after_fee} (RMB)\n"
         f"佣金：{commission_rmb} (RMB)"
     )
+
+# —— 删除入笔 —— #
+@bot.message_handler(func=lambda m: re.match(r'^[\-\+入笔]*\d+(\.\d+)?$', m.text or ''))
+def handle_delete_deposit(msg):
+    chat_id = msg.chat.id
+    user_id = msg.from_user.id
+
+    match = re.findall(r'[\-\+入笔]*([0-9]+(\.\d+)?)', msg.text)
+    if not match:
+        return bot.reply_to(msg, "❌ 无效的删除入笔格式。请输入有效的金额，示例：-1000 或 撤销入款")
+
+    amount = float(match[0][0])
+
+    cursor.execute("SELECT * FROM transactions WHERE chat_id = %s AND user_id = %s ORDER BY date DESC LIMIT 1", (chat_id, user_id))
+    last_transaction = cursor.fetchone()
+    if not last_transaction:
+        return bot.reply_to(msg, "❌ 没有入账记录。")
+
+    try:
+        cursor.execute("DELETE FROM transactions WHERE chat_id = %s AND user_id = %s AND amount = %s ORDER BY date DESC LIMIT 1", (chat_id, user_id, amount))
+        conn.commit()
+        bot.reply_to(msg, f"✅ 已删除编号：{last_transaction['id']}")
+    except Exception as e:
+        conn.rollback()
+        return bot.reply_to(msg, f"❌ 删除失败：{e}")
 
 # —— 启动轮询 —— #
 if __name__ == '__main__':
