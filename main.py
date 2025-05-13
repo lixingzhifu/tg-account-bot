@@ -42,7 +42,12 @@ CREATE TABLE IF NOT EXISTS transactions (
   currency         TEXT    NOT NULL,
   date             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   message_id       BIGINT,
-  status           TEXT DEFAULT 'pending'  -- 状态字段
+  status           TEXT DEFAULT 'pending',  -- 状态字段
+  deducted_amount DOUBLE PRECISION,        -- 扣除后的金额
+  commission       DOUBLE PRECISION,        -- 佣金
+  final_amount     DOUBLE PRECISION,        -- 应下发金额
+  issued_amount    DOUBLE PRECISION DEFAULT 0.0, -- 已下发金额
+  unissued_amount  DOUBLE PRECISION        -- 未下发金额
 );
 """)
 conn.commit()
@@ -126,8 +131,11 @@ def handle_deposit(msg):
     fee_rate = settings['fee_rate']
     commission_rate = settings['commission_rate']
 
+    # 计算扣除后的金额
     amount_after_fee = amount * (1 - fee_rate / 100)
     amount_in_usdt = round(amount_after_fee / rate, 2)
+    
+    # 计算佣金
     commission_rmb = round(amount * (commission_rate / 100), 2)
     commission_usdt = round(commission_rmb / rate, 2)
 
@@ -140,11 +148,15 @@ def handle_deposit(msg):
     transaction_count = cursor.fetchone()['count'] + 1
     transaction_id = str(transaction_count).zfill(3)
 
+    # 计算应下发金额、已下发金额、未下发金额
+    issued_amount = 0.0  # 当前没有已下发金额
+    unissued_amount = amount_after_fee  # 未下发金额等于应下发金额
+
     try:
         cursor.execute("""
-        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency))
+        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id, deducted_amount, commission, final_amount, issued_amount, unissued_amount)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency, msg.message_id, amount_after_fee, commission_rmb, amount_after_fee, issued_amount, unissued_amount))
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -180,8 +192,8 @@ def handle_deposit(msg):
 
     result += (
         f"应下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n"
-        f"已下发：0.0 ({currency}) | 0.00 (USDT)\n"
-        f"未下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n\n"
+        f"已下发：{issued_amount} ({currency}) | 0.00 (USDT)\n"
+        f"未下发：{unissued_amount} ({currency}) | {amount_in_usdt} (USDT)\n\n"
     )
 
     if commission_rate > 0:
