@@ -115,15 +115,15 @@ def handle_deposit(msg):
     bot.reply_to(msg, f"✅ 已入款 +{amount} (RMB)\n编号：001\n"
                       f"001. {datetime.now().strftime('%H:%M:%S')} {amount} * {1 - fee_rate / 100} = {amount_after_fee} linlin131313\n"
                       f"001. {datetime.now().strftime('%H:%M:%S')} {amount} * {commission_rate / 100} = {commission_rmb} 【佣金】\n\n"
-                      f"已入款（1笔）：{amount} (RMB)\n"
-                      f"总入款金额：{amount} (RMB)\n"
+                      f"已入款（1笔）：{amount}\n"
+                      f"总入款金额：{amount}\n"
                       f"汇率：{rate}\n"
                       f"费率：{fee_rate}%\n"
-                      f"佣金：{commission_rmb} (RMB) | {commission_in_base_currency} (USDT)\n\n"
-                      f"应下发：{amount_after_fee} (RMB) | {amount_in_base_currency} (USDT)\n"
-                      f"已下发：0.0 (RMB) | 0.00 (USDT)\n"
-                      f"未下发：{amount_after_fee} (RMB) | {amount_in_base_currency} (USDT)\n"
-                      f"中介佣金应下发：{commission_rmb} (RMB) | {commission_in_base_currency} (USDT)")
+                      f"佣金：{commission_rmb} | {commission_in_base_currency} (USDT)\n\n"
+                      f"应下发：{amount_after_fee} | {amount_in_base_currency} (USDT)\n"
+                      f"已下发：0 | 0 (USDT)\n"
+                      f"未下发：{amount_after_fee} | {amount_in_base_currency} (USDT)\n"
+                      f"佣金应下发：{commission_rmb} | {commission_in_base_currency} (USDT)")
 
 # 删除订单
 @bot.message_handler(func=lambda m: m.text.startswith('-') or m.text.startswith('删除订单'))
