@@ -1,60 +1,79 @@
 import os
-import re
 import psycopg2
-from psycopg2.extras import RealDictCursor
 from telebot import TeleBot, types
-import pytz
+import re
 from datetime import datetime
 
-# —— 环境变量 —— #
-TOKEN = os.getenv("TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
+# 获取 Telegram Token 和数据库配置
+TOKEN = os.getenv('TOKEN')
+DATABASE_URL = os.getenv('DATABASE_URL')
 
-# —— Bot 实例 —— #
-bot = TeleBot(TOKEN)
-
-# —— 数据库连接 —— #
-conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+# 数据库连接配置
+parsed_url = urllib.parse.urlparse(DATABASE_URL)
+conn = psycopg2.connect(
+    database=parsed_url.path[1:],  # Remove leading slash
+    user=parsed_url.username,
+    password=parsed_url.password,
+    host=parsed_url.hostname,
+    port=parsed_url.port
+)
 cursor = conn.cursor()
 
-# —— 初始化建表（只会创建，不会覆盖） —— #
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS settings (
-  chat_id         BIGINT NOT NULL,
-  user_id         BIGINT NOT NULL,
-  currency        TEXT    NOT NULL,
-  rate            DOUBLE PRECISION NOT NULL,
-  fee_rate        DOUBLE PRECISION NOT NULL,
-  commission_rate DOUBLE PRECISION NOT NULL,
-  PRIMARY KEY(chat_id, user_id)
-);
-""")
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS transactions (
-  id               SERIAL PRIMARY KEY,
-  chat_id          BIGINT NOT NULL,
-  user_id          BIGINT NOT NULL,
-  name             TEXT    NOT NULL,
-  amount           DOUBLE PRECISION NOT NULL,
-  rate             DOUBLE PRECISION NOT NULL,
-  fee_rate         DOUBLE PRECISION NOT NULL,
-  commission_rate  DOUBLE PRECISION NOT NULL,
-  currency         TEXT    NOT NULL,
-  date             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  message_id       BIGINT,
-  status           TEXT DEFAULT 'pending',  -- 状态字段
-  deducted_amount DOUBLE PRECISION,        -- 扣除后的金额
-  commission       DOUBLE PRECISION,        -- 佣金
-  final_amount     DOUBLE PRECISION,        -- 应下发金额
-  issued_amount    DOUBLE PRECISION DEFAULT 0.0, -- 已下发金额
-  unissued_amount  DOUBLE PRECISION        -- 未下发金额
-);
-""")
-conn.commit()
+# 设置机器人
+bot = TeleBot(TOKEN)
 
-# —— /start & “记账” 命令 —— #
+# 初始化数据库
+def init_db():
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS transactions (
+            id SERIAL PRIMARY KEY,
+            chat_id BIGINT NOT NULL,
+            user_id BIGINT NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            amount DOUBLE PRECISION NOT NULL,
+            rate DOUBLE PRECISION NOT NULL,
+            fee_rate DOUBLE PRECISION NOT NULL,
+            commission_rate DOUBLE PRECISION NOT NULL,
+            currency VARCHAR(10) NOT NULL,
+            date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            message_id BIGINT,
+            commission DOUBLE PRECISION,  -- 使用原来的字段
+            issued_amount DOUBLE PRECISION DEFAULT 0.0, 
+            unissued_amount DOUBLE PRECISION
+        );
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            id SERIAL PRIMARY KEY,
+            chat_id BIGINT,
+            user_id BIGINT,
+            exchange_rate FLOAT,
+            fee_rate FLOAT,
+            commission_rate FLOAT,
+            currency VARCHAR(10)
+        );
+    ''')
+    conn.commit()
+
+# 计算应下发、已下发金额
+def calculate_deductions(amount, fee_rate, commission_rate, rate):
+    # 计算扣除后的金额
+    deducted_amount = amount * (1 - fee_rate / 100)
+    
+    # 计算佣金
+    commission = deducted_amount * commission_rate / 100
+    
+    # 最终应下发金额
+    final_amount = deducted_amount - commission
+    
+    # 计算应下发金额（人民币和USDT）
+    exchange_final_amount = final_amount / rate
+    
+    return deducted_amount, commission, final_amount, exchange_final_amount
+
+# /start 触发
 @bot.message_handler(commands=['start'])
-def cmd_start(msg):
+def send_welcome(msg):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(types.KeyboardButton('/trade'), types.KeyboardButton('设置交易'))
     bot.reply_to(msg,
@@ -67,7 +86,7 @@ def cmd_start(msg):
 def cmd_start_alias(msg):
     cmd_start(msg)
 
-# —— 设置交易配置 —— #
+# 设置交易配置
 @bot.message_handler(func=lambda m: re.match(r'^(/trade|设置交易)', m.text or ''))
 def cmd_set_trade(msg):
     text = msg.text.strip()
@@ -109,7 +128,7 @@ def cmd_set_trade(msg):
 
     bot.reply_to(msg, f"✅ 设置成功\n设置货币：{currency}\n设置汇率：{rate}\n设置费率：{fee}\n中介佣金：{comm}")
 
-# —— 入账（记录交易） —— #
+# 记录入金
 @bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
 def handle_deposit(msg):
     chat_id = msg.chat.id
@@ -201,27 +220,7 @@ def handle_deposit(msg):
 
     bot.reply_to(msg, result)
 
-# —— 删除订单 —— #
-@bot.message_handler(func=lambda m: re.match(r'^(删除订单|减| -)\d+$', m.text or ''))
-def delete_order(msg):
-    text = msg.text.strip()
-    match = re.match(r'^(删除订单|减| -)(\d+)$', text)
-    if not match:
-        return bot.reply_to(msg, "❌ 无效的删除指令，请输入正确的编号，如：删除订单011 或 -1000。")
-
-    order_id = int(match.group(2))
-    chat_id = msg.chat.id
-    user_id = msg.from_user.id
-
-    try:
-        cursor.execute("DELETE FROM transactions WHERE chat_id = %s AND user_id = %s AND id = %s", (chat_id, user_id, order_id))
-        conn.commit()
-        bot.reply_to(msg, f"✅ 删除订单成功，编号：{order_id}")
-    except Exception as e:
-        conn.rollback()
-        bot.reply_to(msg, f"❌ 删除订单失败：{e}")
-
-# —— 启动轮询 —— #
+# 启动轮询
 if __name__ == '__main__':
-    bot.remove_webhook()  # 确保没有 webhook
-    bot.infinity_polling()  # 永久轮询
+    init_db()  # 初始化数据库
+    bot.infinity_polling()  # 启动轮询，保持 bot 运行
