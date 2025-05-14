@@ -167,9 +167,15 @@ def handle_deposit(msg):
         cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
         total_amount = cursor.fetchone()['sum']
 
-        # 计算已下发金额（如果没有 `issued_amount` 字段，就通过查询已下发交易记录来计算）
-        total_issued = 0.0  # 不查询已下发金额字段，使用内存计算
-        total_unissued = total_amount - total_issued  # 用总金额减去已下发的金额
+        # 获取已下发金额
+        cursor.execute("SELECT SUM(issued_amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+        total_issued = cursor.fetchone()['sum'] or 0  # 防止为空
+
+        # 获取未下发金额
+        total_unissued = total_amount - total_issued  # 已入款 - 已下发 = 未下发
+
+        # 计算应下发金额
+        total_pending = total_unissued  # 初步设定应下发金额为未下发金额（可以进一步修正）
 
         # 生成返回信息
         result = (
