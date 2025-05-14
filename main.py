@@ -125,6 +125,9 @@ def cmd_reset_calculations(msg):
     user_id = msg.from_user.id
 
     try:
+        # 调试信息，确认是否进入了此函数
+        print(f"重置计算已触发，chat_id: {chat_id}, user_id: {user_id}")
+        
         # 清除所有计算的状态
         cursor.execute("""
         UPDATE transactions
@@ -132,11 +135,16 @@ def cmd_reset_calculations(msg):
         WHERE chat_id = %s AND user_id = %s
         """, (chat_id, user_id))
         conn.commit()
+
+        # 调试信息，确认数据库操作成功
+        print(f"SQL执行成功，已重置入账金额")
+
         bot.reply_to(msg, "✅ 计算重置成功！所有已下发金额和应下发金额已清零。")
     except Exception as e:
+        # 捕获并打印错误
+        print(f"错误: {e}")
         conn.rollback()
         bot.reply_to(msg, f"❌ 重置失败：{e}")
-
 
 # —— 入账（记录交易） —— #
 @bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
