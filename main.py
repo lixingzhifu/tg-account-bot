@@ -1,5 +1,6 @@
 import os
 import psycopg2
+from psycopg2.extras import RealDictCursor  # 导入 RealDictCursor
 from telebot import TeleBot, types
 import re
 from datetime import datetime
@@ -20,8 +21,8 @@ conn = psycopg2.connect(
     port=parsed_url.port
 )
 
-# 确保我们能获取字典格式的查询结果
-cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+# 使用 RealDictCursor
+cursor = conn.cursor(cursor_factory=RealDictCursor)
 
 # 设置机器人
 bot = TeleBot(TOKEN)
@@ -42,8 +43,8 @@ def init_db():
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             message_id BIGINT,
             deducted_amount DOUBLE PRECISION,
-            commission DOUBLE PRECISION,  -- 使用原来的字段
-            issued_amount DOUBLE PRECISION DEFAULT 0.0, 
+            commission DOUBLE PRECISION,
+            issued_amount DOUBLE PRECISION DEFAULT 0.0,
             unissued_amount DOUBLE PRECISION
         );
     ''')
