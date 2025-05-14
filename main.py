@@ -118,6 +118,26 @@ def cmd_set_trade(msg):
 
 from decimal import Decimal
 
+# —— 计算重启 —— #
+@bot.message_handler(commands=['calculate_reset'])
+def cmd_reset_calculations(msg):
+    chat_id = msg.chat.id
+    user_id = msg.from_user.id
+
+    try:
+        # 清除所有计算的状态
+        cursor.execute("""
+        UPDATE transactions
+        SET deducted_amount = 0, issued_amount = 0
+        WHERE chat_id = %s AND user_id = %s
+        """, (chat_id, user_id))
+        conn.commit()
+        bot.reply_to(msg, "✅ 计算重置成功！所有已下发金额和应下发金额已清零。")
+    except Exception as e:
+        conn.rollback()
+        bot.reply_to(msg, f"❌ 重置失败：{e}")
+
+
 # —— 入账（记录交易） —— #
 @bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
 def handle_deposit(msg):
