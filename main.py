@@ -153,9 +153,6 @@ def handle_deposit(msg):
         transaction_count = cursor.fetchone()['count'] + 1
         transaction_id = str(transaction_count).zfill(3)
 
-        issued_amount = 0.0  # 目前没有已下发金额
-        unissued_amount = amount_after_fee  # 初始未下发金额等于应下发金额
-
         # 插入交易记录（去掉 commission 字段）
         cursor.execute("""
         INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id, deducted_amount)
@@ -167,9 +164,9 @@ def handle_deposit(msg):
         cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
         total_amount = cursor.fetchone()['sum']
 
-        # 获取已下发金额
-        cursor.execute("SELECT SUM(issued_amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-        total_issued = cursor.fetchone()['sum'] or 0  # 防止为空
+        # 获取已下发金额（避免使用 issued_amount）
+        cursor.execute("SELECT SUM(deducted_amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+        total_issued = cursor.fetchone()['sum'] or 0  # 使用deducted_amount来作为已下发金额的代替
 
         # 获取未下发金额
         total_unissued = total_amount - total_issued  # 已入款 - 已下发 = 未下发
