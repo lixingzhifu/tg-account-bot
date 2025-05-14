@@ -3,6 +3,7 @@ import psycopg2
 from telebot import TeleBot, types
 import re
 from datetime import datetime
+import urllib.parse  # <-- 这里添加导入
 
 # 获取 Telegram Token 和数据库配置
 TOKEN = os.getenv('TOKEN')
