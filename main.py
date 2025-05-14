@@ -135,13 +135,14 @@ def cmd_set_trade(msg):
     bot.reply_to(msg, f"✅ 设置成功\n设置货币：{currency}\n设置汇率：{rate}\n设置费率：{fee}\n中介佣金：{comm}")
 
 # 记录入金
+# —— 入账（记录交易） —— #
 @bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
 def handle_deposit(msg):
     chat_id = msg.chat.id
     user_id = msg.from_user.id
 
     cursor.execute("SELECT * FROM settings WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-    settings = cursor.fetchone()  # 这是一个字典
+    settings = cursor.fetchone()
     if not settings:
         return bot.reply_to(msg, "❌ 请先“设置交易”并填写汇率，才能入账。")
 
@@ -156,13 +157,10 @@ def handle_deposit(msg):
     fee_rate = settings['fee_rate']
     commission_rate = settings['commission_rate']
 
-    # 计算扣除后的金额
-    amount_after_fee = amount * (1 - fee_rate / 100)
-    amount_in_usdt = round(amount_after_fee / rate, 2)
-    
-    # 计算佣金
-    commission_rmb = round(amount * (commission_rate / 100), 2)
-    commission_usdt = round(commission_rmb / rate, 2)
+    amount_after_fee = amount * (1 - fee_rate / 100)  # 扣除手续费后的金额
+    amount_in_usdt = round(amount_after_fee / rate, 2)  # 转换为 USDT
+    commission_rmb = round(amount * (commission_rate / 100), 2)  # 佣金（人民币）
+    commission_usdt = round(commission_rmb / rate, 2)  # 佣金（USDT）
 
     # 获取当前时间（马来西亚时区）
     malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
@@ -173,10 +171,10 @@ def handle_deposit(msg):
     transaction_count = cursor.fetchone()['count'] + 1
     transaction_id = str(transaction_count).zfill(3)
 
-    # 计算应下发金额、已下发金额、未下发金额
-    issued_amount = 0.0  # 当前没有已下发金额
-    unissued_amount = amount_after_fee  # 未下发金额等于应下发金额
+    issued_amount = 0.0  # 目前没有已下发金额
+    unissued_amount = amount_after_fee  # 初始未下发金额等于应下发金额
 
+    # 插入交易记录
     try:
         cursor.execute("""
         INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id, deducted_amount, commission, final_amount, issued_amount, unissued_amount)
@@ -191,7 +189,7 @@ def handle_deposit(msg):
     cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
     total_amount = cursor.fetchone()['sum']
 
-    # 生成返回信息，增加空格和格式调整
+    # 生成返回信息
     result = (
         f"✅ 已入款 +{amount} ({currency})\n\n"
         f"编号：{transaction_id}\n\n"
