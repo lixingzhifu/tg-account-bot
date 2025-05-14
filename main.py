@@ -167,12 +167,8 @@ def handle_deposit(msg):
         cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
         total_amount = cursor.fetchone()['sum']
 
-        # 获取已下发金额
-        cursor.execute("SELECT SUM(issued_amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-        total_issued = cursor.fetchone()['sum'] or 0  # 防止为空
-
-        # 获取未下发金额
-        total_unissued = total_amount - total_issued
+        # 计算总未下发金额（不依赖数据库存储）
+        total_unissued = total_amount - issued_amount  # 用动态计算的方式来替代数据库字段
 
         # 生成返回信息
         result = (
@@ -200,8 +196,8 @@ def handle_deposit(msg):
 
         result += (
             f"应下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n"
-            f"已下发：{total_issued} ({currency}) | {round(total_issued / rate, 2)} (USDT)\n"
-            f"未下发：{total_unissued} ({currency}) | {round(total_unissued / rate, 2)} (USDT)\n\n"
+            f"已下发：{issued_amount} ({currency}) | 0.00 (USDT)\n"
+            f"未下发：{total_unissued} ({currency}) | {amount_in_usdt} (USDT)\n\n"
         )
 
         if commission_rate > 0:
@@ -212,7 +208,6 @@ def handle_deposit(msg):
     except Exception as e:
         conn.rollback()
         bot.reply_to(msg, f"❌ 存储失败：{e}")
-
 
 # —— 启动轮询 —— #
 if __name__ == '__main__':
