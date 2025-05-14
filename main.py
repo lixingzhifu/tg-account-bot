@@ -3,7 +3,8 @@ import psycopg2
 from telebot import TeleBot, types
 import re
 from datetime import datetime
-import urllib.parse  # <-- 这里添加导入
+import urllib.parse
+import pytz
 
 # 获取 Telegram Token 和数据库配置
 TOKEN = os.getenv('TOKEN')
@@ -18,7 +19,9 @@ conn = psycopg2.connect(
     host=parsed_url.hostname,
     port=parsed_url.port
 )
-cursor = conn.cursor()
+
+# 确保我们能获取字典格式的查询结果
+cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
 # 设置机器人
 bot = TeleBot(TOKEN)
@@ -136,7 +139,7 @@ def handle_deposit(msg):
     user_id = msg.from_user.id
 
     cursor.execute("SELECT * FROM settings WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-    settings = cursor.fetchone()
+    settings = cursor.fetchone()  # 这是一个字典
     if not settings:
         return bot.reply_to(msg, "❌ 请先“设置交易”并填写汇率，才能入账。")
 
