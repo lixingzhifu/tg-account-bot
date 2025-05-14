@@ -14,42 +14,50 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 bot = TeleBot(TOKEN)
 
 # —— 数据库连接 —— #
-conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-cursor = conn.cursor()
+try:
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    cursor = conn.cursor()
+    print("数据库连接成功")
+except Exception as e:
+    print(f"数据库连接失败: {e}")
 
 # —— 初始化建表（只会创建，不会覆盖） —— #
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS settings (
-  chat_id         BIGINT NOT NULL,
-  user_id         BIGINT NOT NULL,
-  currency        TEXT    NOT NULL,
-  rate            DOUBLE PRECISION NOT NULL,
-  fee_rate        DOUBLE PRECISION NOT NULL,
-  commission_rate DOUBLE PRECISION NOT NULL,
-  PRIMARY KEY(chat_id, user_id)
-);
-""")
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS transactions (
-  id               SERIAL PRIMARY KEY,
-  chat_id          BIGINT NOT NULL,
-  user_id          BIGINT NOT NULL,
-  name             TEXT    NOT NULL,
-  amount           DOUBLE PRECISION NOT NULL,
-  rate             DOUBLE PRECISION NOT NULL,
-  fee_rate         DOUBLE PRECISION NOT NULL,
-  commission_rate  DOUBLE PRECISION NOT NULL,
-  currency         TEXT    NOT NULL,
-  date             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  message_id       BIGINT,
-  deducted_amount  DOUBLE PRECISION,
-  commission       DOUBLE PRECISION, 
-  final_amount     NUMERIC,  -- 这里是新增的字段
-  issued_amount    NUMERIC DEFAULT 0.0, 
-  unissued_amount  NUMERIC
-);
-""")
-conn.commit()
+try:
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS settings (
+        chat_id         BIGINT NOT NULL,
+        user_id         BIGINT NOT NULL,
+        currency        TEXT    NOT NULL,
+        rate            DOUBLE PRECISION NOT NULL,
+        fee_rate        DOUBLE PRECISION NOT NULL,
+        commission_rate DOUBLE PRECISION NOT NULL,
+        PRIMARY KEY(chat_id, user_id)
+    );
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS transactions (
+        id               SERIAL PRIMARY KEY,
+        chat_id          BIGINT NOT NULL,
+        user_id          BIGINT NOT NULL,
+        name             TEXT    NOT NULL,
+        amount           DOUBLE PRECISION NOT NULL,
+        rate             DOUBLE PRECISION NOT NULL,
+        fee_rate         DOUBLE PRECISION NOT NULL,
+        commission_rate  DOUBLE PRECISION NOT NULL,
+        currency         TEXT    NOT NULL,
+        date             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        message_id       BIGINT,
+        deducted_amount  DOUBLE PRECISION,
+        commission       DOUBLE PRECISION, 
+        final_amount     NUMERIC, 
+        issued_amount    NUMERIC DEFAULT 0.0, 
+        unissued_amount  NUMERIC
+    );
+    """)
+    conn.commit()
+    print("表格初始化完成")
+except Exception as e:
+    print(f"数据库表格创建失败: {e}")
 
 # —— /start & “记账” 命令 —— #
 @bot.message_handler(commands=['start'])
@@ -197,3 +205,11 @@ def handle_deposit(msg):
         result += f"中介佣金应下发：{commission_rmb} ({currency}) | {commission_usdt} (USDT)\n"
 
     bot.reply_to(msg, result)
+
+# —— 启动轮询 —— #
+if __name__ == '__main__':
+    try:
+        bot.remove_webhook()  # 确保没有 webhook
+        bot.infinity_polling()  # 永久轮询
+    except Exception as e:
+        print(f"机器人启动失败：{e}")
