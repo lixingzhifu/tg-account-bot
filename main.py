@@ -156,12 +156,12 @@ def handle_deposit(msg):
     issued_amount = 0.0  # 目前没有已下发金额
     unissued_amount = amount_after_fee  # 初始未下发金额等于应下发金额
 
-    # 插入交易记录
+    # 插入交易记录（去掉 commission 字段）
     try:
         cursor.execute("""
-        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id, deducted_amount, commission, final_amount, issued_amount, unissued_amount)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency, msg.message_id, amount_after_fee, commission_rmb, amount_after_fee, issued_amount, unissued_amount))
+        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id, deducted_amount, final_amount, issued_amount, unissued_amount)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency, msg.message_id, amount_after_fee, amount_after_fee, issued_amount, unissued_amount))
         conn.commit()
     except Exception as e:
         conn.rollback()
