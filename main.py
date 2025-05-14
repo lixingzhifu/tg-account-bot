@@ -152,7 +152,6 @@ def handle_deposit(msg):
     transaction_count = cursor.fetchone()['count'] + 1
     transaction_id = str(transaction_count).zfill(3)
 
-    # 计算应下发金额
     issued_amount = 0.0  # 目前没有已下发金额
     unissued_amount = amount_after_fee  # 初始未下发金额等于应下发金额
 
@@ -170,6 +169,13 @@ def handle_deposit(msg):
     # 获取已入款总数
     cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
     total_amount = cursor.fetchone()['sum']
+
+    # 获取已下发金额
+    cursor.execute("SELECT SUM(issued_amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+    total_issued = cursor.fetchone()['sum'] or 0  # 防止为空
+
+    # 获取未下发金额
+    total_unissued = total_amount - total_issued
 
     # 生成返回信息
     result = (
@@ -197,8 +203,8 @@ def handle_deposit(msg):
 
     result += (
         f"应下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n"
-        f"已下发：{issued_amount} ({currency}) | 0.00 (USDT)\n"
-        f"未下发：{unissued_amount} ({currency}) | {amount_in_usdt} (USDT)\n\n"
+        f"已下发：{total_issued} ({currency}) | {round(total_issued / rate, 2)} (USDT)\n"
+        f"未下发：{total_unissued} ({currency}) | {round(total_unissued / rate, 2)} (USDT)\n\n"
     )
 
     if commission_rate > 0:
