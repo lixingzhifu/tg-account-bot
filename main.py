@@ -169,7 +169,7 @@ def handle_deposit(msg):
         cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
         total_amount = float(cursor.fetchone()['sum'] or 0)  # 确保是float类型
 
-        # 获取已下发金额
+        # 获取已下发金额（我们使用deducted_amount字段表示已下发金额）
         cursor.execute("SELECT SUM(deducted_amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
         total_issued = float(cursor.fetchone()['sum'] or 0)  # 确保是float类型
 
