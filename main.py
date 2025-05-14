@@ -125,24 +125,25 @@ def cmd_reset_calculations(msg):
     user_id = msg.from_user.id
 
     try:
-        # 调试信息，确认是否进入了此函数
-        print(f"重置计算已触发，chat_id: {chat_id}, user_id: {user_id}")
-        
         # 清除所有计算的状态
         cursor.execute("""
         UPDATE transactions
-        SET deducted_amount = 0, issued_amount = 0
+        SET deducted_amount = 0, issued_amount = 0, unissued_amount = 0
         WHERE chat_id = %s AND user_id = %s
         """, (chat_id, user_id))
         conn.commit()
 
-        # 调试信息，确认数据库操作成功
-        print(f"SQL执行成功，已重置入账金额")
+        # 重置已下发金额、未下发金额等
+        cursor.execute("""
+        UPDATE settings
+        SET issued_amount = 0, unissued_amount = 0
+        WHERE chat_id = %s AND user_id = %s
+        """, (chat_id, user_id))
+        conn.commit()
 
         bot.reply_to(msg, "✅ 计算重置成功！所有已下发金额和应下发金额已清零。")
     except Exception as e:
         # 捕获并打印错误
-        print(f"错误: {e}")
         conn.rollback()
         bot.reply_to(msg, f"❌ 重置失败：{e}")
 
@@ -152,95 +153,88 @@ def handle_deposit(msg):
     chat_id = msg.chat.id
     user_id = msg.from_user.id
 
+    cursor.execute("SELECT * FROM settings WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+    settings = cursor.fetchone()
+    if not settings:
+        return bot.reply_to(msg, "❌ 请先“设置交易”并填写汇率，才能入账。")
+
+    match = re.findall(r'[\+入笔]*([0-9]+(\.\d+)?)', msg.text)
+    if not match:
+        return bot.reply_to(msg, "❌ 无效的入账格式。请输入有效的金额，示例：+1000 或 入1000")
+
+    amount = float(match[0][0])
+
+    currency = settings['currency']
+    rate = settings['rate']
+    fee_rate = settings['fee_rate']
+    commission_rate = settings['commission_rate']
+
+    amount_after_fee = amount * (1 - fee_rate / 100)  # 扣除手续费后的金额
+    amount_in_usdt = round(amount_after_fee / rate, 2)  # 转换为 USDT
+    commission_rmb = round(amount * (commission_rate / 100), 2)  # 佣金（人民币）
+    commission_usdt = round(commission_rmb / rate, 2)  # 佣金（USDT）
+
+    # 获取当前时间（马来西亚时区）
+    malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+    time_now = datetime.now(malaysia_tz).strftime('%H:%M:%S')
+
+    # 生成编号（简单的序列号）
+    cursor.execute("SELECT COUNT(*) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+    transaction_count = cursor.fetchone()['count'] + 1
+    transaction_id = str(transaction_count).zfill(3)
+
+    # 已下发、未下发金额的计算
+    issued_amount = 0.0  # 目前没有已下发金额
+    unissued_amount = amount_after_fee  # 初始未下发金额等于应下发金额
+
     try:
-        cursor.execute("SELECT * FROM settings WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-        settings = cursor.fetchone()
-        if not settings:
-            return bot.reply_to(msg, "❌ 请先“设置交易”并填写汇率，才能入账。")
-
-        match = re.findall(r'[\+入笔]*([0-9]+(\.\d+)?)', msg.text)
-        if not match:
-            return bot.reply_to(msg, "❌ 无效的入账格式。请输入有效的金额，示例：+1000 或 入1000")
-
-        amount = float(match[0][0])
-
-        currency = settings['currency']
-        rate = settings['rate']
-        fee_rate = settings['fee_rate']
-        commission_rate = settings['commission_rate']
-
-        amount_after_fee = amount * (1 - fee_rate / 100)  # 扣除手续费后的金额
-        amount_in_usdt = round(amount_after_fee / rate, 2)  # 转换为 USDT
-        commission_rmb = round(amount * (commission_rate / 100), 2)  # 佣金（人民币）
-        commission_usdt = round(commission_rmb / rate, 2)  # 佣金（USDT）
-
-        # 获取当前时间（马来西亚时区）
-        malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
-        time_now = datetime.now(malaysia_tz).strftime('%H:%M:%S')
-
-        # 生成编号（简单的序列号）
-        cursor.execute("SELECT COUNT(*) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-        transaction_count = cursor.fetchone()['count'] + 1
-        transaction_id = str(transaction_count).zfill(3)
-
-        issued_amount = 0.0  # 目前没有已下发金额
-        unissued_amount = amount_after_fee  # 初始未下发金额等于应下发金额
-
-        # 插入交易记录
         cursor.execute("""
-        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id, deducted_amount)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency, msg.message_id, amount_after_fee))
+        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id, deducted_amount, commission, final_amount, issued_amount, unissued_amount)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency, msg.message_id, amount_after_fee, commission_rmb, amount_after_fee, issued_amount, unissued_amount))
         conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return bot.reply_to(msg, f"❌ 存储失败：{e}")
 
-        # 获取已入款总数，并确保值为float类型
-        cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-        total_amount = float(cursor.fetchone()['sum'] or 0)  # 确保是float类型
+    # 获取已入款总数
+    cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+    total_amount = cursor.fetchone()['sum']
 
-        # 获取已下发金额（我们使用deducted_amount字段表示已下发金额）
-        cursor.execute("SELECT SUM(deducted_amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-        total_issued = float(cursor.fetchone()['sum'] or 0)  # 确保是float类型
+    # 生成返回信息
+    result = (
+        f"✅ 已入款 +{amount} ({currency})\n\n"
+        f"编号：{transaction_id}\n\n"
+        f"{transaction_id}. {time_now} {amount} * {1 - fee_rate / 100} / {rate} = {amount_in_usdt}  {msg.from_user.username}\n"
+    )
 
-        # 获取未下发金额
-        total_unissued = total_amount - total_issued  # 已入款 - 已下发 = 未下发
-
-        # 计算应下发金额（未下发金额）
-        total_pending = total_unissued  # 总金额减去已下发金额即为应下发金额
-
-        # 生成返回信息
-        result = (
-            f"✅ 已入款 +{amount} ({currency})\n\n"
-            f"编号：{transaction_id}\n\n"
-            f"{transaction_id}. {time_now} {amount} * {1 - fee_rate / 100} / {rate} = {amount_in_usdt}  {msg.from_user.username}\n"
-        )
-
-        if commission_rate > 0:
-            result += (
-                f"{transaction_id}. {time_now} {amount} * {commission_rate / 100} = {commission_rmb} 【佣金】\n\n"
-            )
-
+    if commission_rate > 0:
         result += (
-            f"已入款（{transaction_count}笔）：{total_amount} ({currency})\n\n"
-            f"总入款金额：{total_amount} ({currency})\n"
-            f"汇率：{rate}\n"
-            f"费率：{fee_rate}%\n"
+            f"{transaction_id}. {time_now} {amount} * {commission_rate / 100} = {commission_rmb} 【佣金】\n\n"
         )
 
-        if commission_rate > 0:
-            result += f"佣金：{commission_rmb} ({currency}) | {commission_usdt} USDT\n\n"
-        else:
-            result += "佣金：0.0 (RMB) | 0.0 USDT\n\n"
+    result += (
+        f"已入款（{transaction_count}笔）：{total_amount} ({currency})\n\n"
+        f"总入款金额：{total_amount} ({currency})\n"
+        f"汇率：{rate}\n"
+        f"费率：{fee_rate}%\n"
+    )
 
-        result += (
-            f"应下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n"
-            f"已下发：{total_issued} ({currency}) | 0.00 (USDT)\n"
-            f"未下发：{total_unissued} ({currency}) | {amount_in_usdt} (USDT)\n\n"
-        )
+    if commission_rate > 0:
+        result += f"佣金：{commission_rmb} ({currency}) | {commission_usdt} USDT\n\n"
+    else:
+        result += "佣金：0.0 (RMB) | 0.0 USDT\n\n"
 
-        if commission_rate > 0:
-            result += f"中介佣金应下发：{commission_rmb} ({currency}) | {commission_usdt} (USDT)\n"
+    result += (
+        f"应下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n"
+        f"已下发：{issued_amount} ({currency}) | 0.00 (USDT)\n"
+        f"未下发：{unissued_amount} ({currency}) | {amount_in_usdt} (USDT)\n\n"
+    )
 
-        bot.reply_to(msg, result)
+    if commission_rate > 0:
+        result += f"中介佣金应下发：{commission_rmb} ({currency}) | {commission_usdt} (USDT)\n"
+
+    bot.reply_to(msg, result)
 
     except Exception as e:
         conn.rollback()
