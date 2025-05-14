@@ -42,7 +42,11 @@ CREATE TABLE IF NOT EXISTS transactions (
   currency         TEXT    NOT NULL,
   date             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   message_id       BIGINT,
-  status           TEXT DEFAULT 'pending'  -- 状态字段
+  deducted_amount  DOUBLE PRECISION,
+  commission       DOUBLE PRECISION, 
+  final_amount     NUMERIC,  -- 这里是新增的字段
+  issued_amount    NUMERIC DEFAULT 0.0, 
+  unissued_amount  NUMERIC
 );
 """)
 conn.commit()
@@ -105,8 +109,6 @@ def cmd_set_trade(msg):
     bot.reply_to(msg, f"✅ 设置成功\n设置货币：{currency}\n设置汇率：{rate}\n设置费率：{fee}\n中介佣金：{comm}")
 
 # —— 入账（记录交易） —— #
-# —— 入账（记录交易） —— #
-# —— 入账（记录交易） —— #
 @bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
 def handle_deposit(msg):
     chat_id = msg.chat.id
@@ -146,12 +148,12 @@ def handle_deposit(msg):
     issued_amount = 0.0  # 目前没有已下发金额
     unissued_amount = amount_after_fee  # 初始未下发金额等于应下发金额
 
-    # 插入交易记录（去掉 commission 字段）
+    # 插入交易记录
     try:
         cursor.execute("""
-        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id, deducted_amount, final_amount, issued_amount, unissued_amount)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency, msg.message_id, amount_after_fee, amount_after_fee, issued_amount, unissued_amount))
+        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id, deducted_amount, commission, final_amount, issued_amount, unissued_amount)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency, msg.message_id, amount_after_fee, commission_rmb, amount_after_fee, issued_amount, unissued_amount))
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -195,28 +197,3 @@ def handle_deposit(msg):
         result += f"中介佣金应下发：{commission_rmb} ({currency}) | {commission_usdt} (USDT)\n"
 
     bot.reply_to(msg, result)
-
-# —— 删除订单 —— #
-@bot.message_handler(func=lambda m: re.match(r'^(删除订单|减| -)\d+$', m.text or ''))
-def delete_order(msg):
-    text = msg.text.strip()
-    match = re.match(r'^(删除订单|减| -)(\d+)$', text)
-    if not match:
-        return bot.reply_to(msg, "❌ 无效的删除指令，请输入正确的编号，如：删除订单011 或 -1000。")
-
-    order_id = int(match.group(2))
-    chat_id = msg.chat.id
-    user_id = msg.from_user.id
-
-    try:
-        cursor.execute("DELETE FROM transactions WHERE chat_id = %s AND user_id = %s AND id = %s", (chat_id, user_id, order_id))
-        conn.commit()
-        bot.reply_to(msg, f"✅ 删除订单成功，编号：{order_id}")
-    except Exception as e:
-        conn.rollback()
-        bot.reply_to(msg, f"❌ 删除订单失败：{e}")
-
-# —— 启动轮询 —— #
-if __name__ == '__main__':
-    bot.remove_webhook()  # 确保没有 webhook
-    bot.infinity_polling()  # 永久轮询
