@@ -158,7 +158,7 @@ def handle_deposit(msg):
         issued_amount = 0.0  # 目前没有已下发金额
         unissued_amount = amount_after_fee  # 初始未下发金额等于应下发金额
 
-        # 插入交易记录（去掉 commission 字段）
+        # 插入交易记录
         cursor.execute("""
         INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id, deducted_amount)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
