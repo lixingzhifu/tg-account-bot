@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 import urllib.parse
 import pytz
+from psycopg2.extras import RealDictCursor  # 确保正确导入 RealDictCursor
 
 # 获取 Telegram Token 和数据库配置
 TOKEN = os.getenv('TOKEN')
@@ -20,8 +21,8 @@ conn = psycopg2.connect(
     port=parsed_url.port
 )
 
-# 确保我们能获取字典格式的查询结果
-cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+# 使用 RealDictCursor
+cursor = conn.cursor(cursor_factory=RealDictCursor)
 
 # 设置机器人
 bot = TeleBot(TOKEN)
