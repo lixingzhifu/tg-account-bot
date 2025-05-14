@@ -5,7 +5,6 @@ import re
 from datetime import datetime
 import urllib.parse
 import pytz
-from psycopg2.extras import RealDictCursor  # 确保正确导入 RealDictCursor
 
 # 获取 Telegram Token 和数据库配置
 TOKEN = os.getenv('TOKEN')
@@ -21,8 +20,8 @@ conn = psycopg2.connect(
     port=parsed_url.port
 )
 
-# 使用 RealDictCursor
-cursor = conn.cursor(cursor_factory=RealDictCursor)
+# 确保我们能获取字典格式的查询结果
+cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
 # 设置机器人
 bot = TeleBot(TOKEN)
@@ -42,6 +41,7 @@ def init_db():
             currency VARCHAR(10) NOT NULL,
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             message_id BIGINT,
+            deducted_amount DOUBLE PRECISION,
             commission DOUBLE PRECISION,  -- 使用原来的字段
             issued_amount DOUBLE PRECISION DEFAULT 0.0, 
             unissued_amount DOUBLE PRECISION
