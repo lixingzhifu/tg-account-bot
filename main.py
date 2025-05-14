@@ -116,6 +116,8 @@ def cmd_set_trade(msg):
 
     bot.reply_to(msg, f"✅ 设置成功\n设置货币：{currency}\n设置汇率：{rate}\n设置费率：{fee}\n中介佣金：{comm}")
 
+from decimal import Decimal
+
 # —— 入账（记录交易） —— #
 @bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
 def handle_deposit(msg):
@@ -153,6 +155,9 @@ def handle_deposit(msg):
         transaction_count = cursor.fetchone()['count'] + 1
         transaction_id = str(transaction_count).zfill(3)
 
+        issued_amount = 0.0  # 目前没有已下发金额
+        unissued_amount = amount_after_fee  # 初始未下发金额等于应下发金额
+
         # 插入交易记录（去掉 commission 字段）
         cursor.execute("""
         INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id, deducted_amount)
@@ -160,13 +165,13 @@ def handle_deposit(msg):
         """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency, msg.message_id, amount_after_fee))
         conn.commit()
 
-        # 获取已入款总数
+        # 获取已入款总数，并确保值为float类型
         cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-        total_amount = cursor.fetchone()['sum']
+        total_amount = float(cursor.fetchone()['sum'] or 0)  # 确保是float类型
 
-        # 获取已下发金额（避免使用 issued_amount）
+        # 获取已下发金额，并确保值为float类型
         cursor.execute("SELECT SUM(deducted_amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-        total_issued = cursor.fetchone()['sum'] or 0  # 使用deducted_amount来作为已下发金额的代替
+        total_issued = float(cursor.fetchone()['sum'] or 0)  # 确保是float类型
 
         # 获取未下发金额
         total_unissued = total_amount - total_issued  # 已入款 - 已下发 = 未下发
