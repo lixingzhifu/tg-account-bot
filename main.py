@@ -202,5 +202,6 @@ def cmd_reset(msg):
 
 # —— 启动轮询 —— #
 if __name__ == '__main__':
+    bot.delete_webhook()
     bot.remove_webhook()
     bot.infinity_polling()
