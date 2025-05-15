@@ -134,7 +134,7 @@ def handle_deposit(msg):
         currency = s['currency']
         after_fee = amount * (1 - fee_rate/100)
 
-                # 5) 插入记录
+        # 5) 插入记录
         cursor.execute("""
             INSERT INTO transactions
               (chat_id,user_id,name,amount,rate,fee_rate,commission_rate,
@@ -147,20 +147,33 @@ def handle_deposit(msg):
         ))
         conn.commit()
 
-        # 6) 获取总笔数，用于编号和汇总显示
-        cursor.execute(
-            "SELECT COUNT(*) AS cnt FROM transactions WHERE chat_id=%s AND user_id=%s",
-            (chat_id, user_id)
-        )
+        # 6) 汇总全量数据：总笔数、总入款 & 总应下发
+        cursor.execute("SELECT COUNT(*) AS cnt FROM transactions WHERE chat_id=%s AND user_id=%s",
+                       (chat_id, user_id))
         cnt = cursor.fetchone()['cnt']
 
-        # —— 7) 今天所有入笔/删除记录列表 & 佣金累积 —— #
+        cursor.execute("""
+            SELECT SUM(amount)          AS sum_amt,
+                   SUM(deducted_amount) AS sum_pending
+            FROM transactions
+            WHERE chat_id=%s AND user_id=%s
+        """, (chat_id, user_id))
+        agg = cursor.fetchone()
+        total_amt     = float(agg['sum_amt']     or 0)
+        total_pending = float(agg['sum_pending'] or 0)
+        total_issued  = 0.0
+        total_unissued= total_pending
+
+        tp_usdt = round(total_pending  / rate, 2)
+        ti_usdt = round(total_issued   / rate, 2)
+        tu_usdt = round(total_unissued / rate, 2)
+
+        # 7) 拉取“今日入笔/删除”列表并累积今日佣金
         cursor.execute("""
             SELECT id, date, amount, fee_rate, rate, name, commission_rate
             FROM transactions
             WHERE chat_id = %s
               AND user_id = %s
-              -- 以 UTC 时间 +8 小时后取日期，等于本地“今日”
               AND (date + INTERVAL '8 hours')::date = (NOW() + INTERVAL '8 hours')::date
             ORDER BY date
         """, (chat_id, user_id))
@@ -175,8 +188,8 @@ def handle_deposit(msg):
             abs_amt = abs(amt)
             after = abs_amt * (1 - r['fee_rate']/100)
             usdt = round(after / r['rate'], 2)
-            # 展示也 +8 小时
             ts = (r['date'] + timedelta(hours=8)).strftime('%H:%M:%S')
+
             lines.append(
                 f"{r['id']:03d}. {ts}  {sign}{abs_amt} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}"
             )
@@ -184,49 +197,7 @@ def handle_deposit(msg):
                 positive_count += 1
             total_comm_rmb += abs_amt * (r['commission_rate']/100)
 
-        # —— 8) 构造回复 —— #
-        res  = f"今日入笔（{positive_count}笔）\n"
-        if lines:
-            res += "\n".join(lines) + "\n\n"
-        else:
-            res += "\n"
-        res += "今日下发（0笔）\n\n"
-
-        # 底部统计（不变）
-        res += (
-            f"已入款（{cnt}笔）：{total_amt} ({currency})\n\n"
-            f"应下发：{total_pending} ({currency}) | {tp_usdt} (USDT)\n"
-            f"已下发：{total_issued} ({currency}) | {ti_usdt} (USDT)\n"
-            f"未下发：{total_unissued} ({currency}) | {tu_usdt} (USDT)\n\n"
-            f"佣金应下发：{round(total_comm_rmb,2)} ({currency}) | "
-            f"{round(total_comm_rmb/rate,2)} (USDT)\n"
-            f"佣金已下发：0.0 ({currency}) | 0.00 (USDT)\n"
-            f"佣金未下发：{round(total_comm_rmb,2)} ({currency}) | "
-            f"{round(total_comm_rmb/rate,2)} (USDT)\n"
-        )
-
-        bot.reply_to(msg, res)
-        return
-
-        # 9) 底部汇总
-        # 总入款 & 总应下发
-        cursor.execute("""
-            SELECT SUM(amount) AS sum_amt,
-                   SUM(deducted_amount) AS sum_pending
-            FROM transactions
-            WHERE chat_id=%s AND user_id=%s
-        """, (chat_id, user_id))
-        agg = cursor.fetchone()
-        total_amt     = float(agg['sum_amt']     or 0)
-        total_pending = float(agg['sum_pending'] or 0)
-        total_issued  = 0.0
-        total_unissued = total_pending
-
-        tp_usdt = round(total_pending  / rate, 2)
-        ti_usdt = round(total_issued   / rate, 2)
-        tu_usdt = round(total_unissued / rate, 2)
-
-        # 10) 构造回复
+        # 8) 构造并发送回复
         res  = f"今日入笔（{positive_count}笔）\n"
         if lines:
             res += "\n".join(lines) + "\n\n"
