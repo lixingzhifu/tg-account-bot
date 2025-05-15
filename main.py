@@ -107,6 +107,10 @@ def cmd_reset(msg):
         conn.rollback()
         bot.reply_to(msg, f"❌ 重置失败：{e}")
 
+from datetime import datetime, timedelta
+import pytz
+import re
+
 # —— 入账（记录交易） —— #
 @bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
 def handle_deposit(msg):
@@ -135,14 +139,15 @@ def handle_deposit(msg):
         comm_usdt = round(comm_rmb/rate, 2)
 
         # 4) 时间和编号
-        tz = pytz.timezone('Asia/Kuala_Lumpur')
-        t  = datetime.now(tz).strftime('%H:%M:%S')
+        malaysia = pytz.timezone('Asia/Kuala_Lumpur')
+        now_local = datetime.now(malaysia)
+        t = now_local.strftime('%H:%M:%S')
         cursor.execute("SELECT COUNT(*) AS cnt FROM transactions WHERE chat_id=%s AND user_id=%s",
                        (chat_id, user_id))
         cnt = cursor.fetchone()['cnt'] + 1
         tid = str(cnt).zfill(3)
 
-        # 5) 插入记录（只插入表里已有的列）
+        # 5) 插入记录
         cursor.execute("""
             INSERT INTO transactions
               (chat_id,user_id,name,amount,rate,fee_rate,commission_rate,
@@ -155,17 +160,22 @@ def handle_deposit(msg):
         ))
         conn.commit()
 
-        # 6) 汇总当日所有交易
+        # 6) —— 今天所有入笔/删除记录列表（按马来西亚“今日”区间） —— #
+        today = now_local.date()
+        start_local = malaysia.localize(datetime.combine(today, datetime.min.time()))
+        end_local   = start_local + timedelta(days=1)
+        start_utc = start_local.astimezone(pytz.utc)
+        end_utc   = end_local.astimezone(pytz.utc)
+
         cursor.execute("""
             SELECT id, date, amount, fee_rate, rate, name
             FROM transactions
             WHERE chat_id=%s AND user_id=%s
-              AND date::date = CURRENT_DATE
+              AND date >= %s AND date < %s
             ORDER BY date
-        """, (chat_id, user_id))
+        """, (chat_id, user_id, start_utc, end_utc))
         rows = cursor.fetchall()
 
-        # 构造“今日入笔”列表
         lines = []
         positive_count = 0
         for r in rows:
@@ -173,31 +183,30 @@ def handle_deposit(msg):
             amt = abs(r['amount'])
             after = amt * (1 - r['fee_rate']/100)
             usdt = round(after / r['rate'], 2)
-            time_str = r['date'].strftime('%H:%M:%S')
-            lines.append(f"{r['id']:03d}. {time_str}  {sign}{amt} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}")
+            ts = r['date'].astimezone(malaysia).strftime('%H:%M:%S')
+            lines.append(f"{r['id']:03d}. {ts}  {sign}{amt} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}")
             if r['amount'] > 0:
                 positive_count += 1
 
         # 7) 汇总总入款 & 应下发
         cursor.execute("""
-            SELECT
-              SUM(amount)          AS sum_amt,
-              SUM(deducted_amount) AS sum_pending
+            SELECT SUM(amount)          AS sum_amt,
+                   SUM(deducted_amount) AS sum_pending
             FROM transactions
             WHERE chat_id=%s AND user_id=%s
         """, (chat_id, user_id))
         agg = cursor.fetchone()
-        total_amt      = float(agg['sum_amt']     or 0)
-        total_pending  = float(agg['sum_pending'] or 0)
-        total_issued   = 0.0
-        total_unissued = total_pending
+        total_amt     = float(agg['sum_amt']     or 0)
+        total_pending = float(agg['sum_pending'] or 0)
+        total_issued  = 0.0
+        total_unissued= total_pending
 
-        # USDT 换算
+        # 换算 USDT
         tp_usdt = round(total_pending  / rate, 2)
         ti_usdt = round(total_issued   / rate, 2)
         tu_usdt = round(total_unissued / rate, 2)
 
-        # 8) 构造最终回复
+        # 8) 构造回复
         res  = f"今日入笔（{positive_count}笔）\n" + "\n".join(lines) + "\n\n"
         res += "今日下发（0笔）\n\n"
         res += (
