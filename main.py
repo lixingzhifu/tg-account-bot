@@ -122,8 +122,10 @@ def cmd_reset_calculations(msg):
         """, (chat_id, user_id))
         conn.commit()
 
-        bot.reply_to(msg, "✅ 计算重置成功！所有已下发金额和应下发金额已清零。")
+        # 回复用户
+        bot.reply_to(msg, "✅ 记录已清零！所有已下发金额和应下发金额已清零。")
     except Exception as e:
+        # 捕获并打印错误
         conn.rollback()
         bot.reply_to(msg, f"❌ 重置失败：{e}")
 
