@@ -132,97 +132,107 @@ def handle_deposit(msg):
     user_id = msg.from_user.id
 
     try:
-        # 读取用户设置
-        cursor.execute("SELECT * FROM settings WHERE chat_id = %s AND user_id = %s",
-                       (chat_id, user_id))
+        # 1. 读取用户设置
+        cursor.execute(
+            "SELECT * FROM settings WHERE chat_id = %s AND user_id = %s",
+            (chat_id, user_id)
+        )
         settings = cursor.fetchone()
         if not settings:
             return bot.reply_to(msg, "❌ 请先“设置交易”并填写汇率，才能入账。")
 
-        # 解析金额
+        # 2. 解析金额
         match = re.findall(r'[\+入笔]*([0-9]+(?:\.[0-9]+)?)', msg.text)
         if not match:
             return bot.reply_to(msg, "❌ 无效的入账格式。示例：+1000 或 入1000")
-
         amount = float(match[0])
 
-        # 获取汇率等设置
+        # 3. 获取汇率等参数
         currency        = settings['currency']
         rate            = settings['rate']
         fee_rate        = settings['fee_rate']
         commission_rate = settings['commission_rate']
 
-        # 计算各项
+        # 4. 计算：扣手续费、换 USDT、佣金
         amount_after_fee = amount * (1 - fee_rate / 100)
         amount_in_usdt   = round(amount_after_fee / rate, 2)
         commission_rmb   = round(amount * (commission_rate / 100), 2)
         commission_usdt  = round(commission_rmb / rate, 2)
-      
-        # 获取当前时间（马来西亚时区）
-        malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
-        time_now = datetime.now(malaysia_tz).strftime('%H:%M:%S')
 
-        # 生成编号（简单的序列号）
-        cursor.execute("SELECT COUNT(*) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-        transaction_count = cursor.fetchone()['count'] + 1
-        transaction_id = str(transaction_count).zfill(3)
+        # 5. 时间和编号
+        tz = pytz.timezone('Asia/Kuala_Lumpur')
+        time_now = datetime.now(tz).strftime('%H:%M:%S')
+        cursor.execute(
+            "SELECT COUNT(*) AS cnt FROM transactions WHERE chat_id=%s AND user_id=%s",
+            (chat_id, user_id)
+        )
+        cnt = cursor.fetchone()['cnt'] + 1
+        tid = str(cnt).zfill(3)
 
-        issued_amount = 0.0  # 目前没有已下发金额
-        unissued_amount = amount_after_fee  # 初始未下发金额等于应下发金额
-
-        # 插入交易记录
+        # 6. 插入这笔交易：deducted_amount 是“应下发”，issued_amount 初始 0
         cursor.execute("""
-        INSERT INTO transactions (chat_id, user_id, name, amount, rate, fee_rate, commission_rate, currency, message_id, deducted_amount)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (chat_id, user_id, msg.from_user.username, amount, rate, fee_rate, commission_rate, currency, msg.message_id, amount_after_fee))
+            INSERT INTO transactions
+              (chat_id, user_id, name, amount, rate, fee_rate, commission_rate,
+               currency, message_id, deducted_amount, issued_amount)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0.0)
+        """, (
+            chat_id, user_id, msg.from_user.username,
+            amount, rate, fee_rate, commission_rate,
+            currency, msg.message_id, amount_after_fee
+        ))
         conn.commit()
 
-        # 获取已入款总数，并确保值为float类型
-        cursor.execute("SELECT SUM(amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-        total_amount = float(cursor.fetchone()['sum'] or 0)  # 确保是float类型
+        # 7. 汇总所有交易：
+        #   total_amount       = SUM(amount)
+        #   total_pending_rmb  = SUM(deducted_amount)  （所有应下发）
+        #   total_issued_rmb   = SUM(issued_amount)   （所有已下发）
+        cursor.execute(
+            "SELECT SUM(amount)           AS sum_amt, "
+            "       SUM(deducted_amount)  AS sum_pending, "
+            "       SUM(issued_amount)    AS sum_issued "
+            "FROM transactions "
+            "WHERE chat_id=%s AND user_id=%s",
+            (chat_id, user_id)
+        )
+        row = cursor.fetchone()
+        total_amount       = float(row['sum_amt']     or 0)
+        total_pending_rmb  = float(row['sum_pending'] or 0)
+        total_issued_rmb   = float(row['sum_issued']  or 0)
+        total_unissued_rmb = total_pending_rmb - total_issued_rmb
 
-        # 获取已下发金额（我们使用deducted_amount字段表示已下发金额）
-        cursor.execute("SELECT SUM(deducted_amount) FROM transactions WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
-        total_issued = float(cursor.fetchone()['sum'] or 0)  # 确保是float类型
+        # 换算 USDT
+        total_pending_usdt  = round(total_pending_rmb  / rate, 2)
+        total_issued_usdt   = round(total_issued_rmb   / rate, 2)
+        total_unissued_usdt = round(total_unissued_rmb / rate, 2)
 
-        # 获取未下发金额
-        total_unissued = total_amount - total_issued  # 已入款 - 已下发 = 未下发
-
-        # 计算应下发金额（未下发金额）
-        total_pending = total_unissued  # 总金额减去已下发金额即为应下发金额
-
-        # 生成返回信息
+        # 8. 生成回复
         result = (
             f"✅ 已入款 +{amount} ({currency})\n\n"
-            f"编号：{transaction_id}\n\n"
-            f"{transaction_id}. {time_now} {amount} * {1 - fee_rate / 100} / {rate} = {amount_in_usdt}  {msg.from_user.username}\n"
+            f"编号：{tid}\n\n"
+            f"{tid}. {time_now} {amount} * {1 - fee_rate/100} / {rate} = {amount_in_usdt}  {msg.from_user.username}\n"
         )
-
         if commission_rate > 0:
             result += (
-                f"{transaction_id}. {time_now} {amount} * {commission_rate / 100} = {commission_rmb} 【佣金】\n\n"
+                f"{tid}. {time_now} {amount} * {commission_rate/100} = {commission_rmb} 【佣金】\n\n"
             )
-
         result += (
-            f"已入款（{transaction_count}笔）：{total_amount} ({currency})\n\n"
+            f"已入款（{cnt}笔）：{total_amount} ({currency})\n\n"
             f"总入款金额：{total_amount} ({currency})\n"
             f"汇率：{rate}\n"
             f"费率：{fee_rate}%\n"
         )
-
         if commission_rate > 0:
             result += f"佣金：{commission_rmb} ({currency}) | {commission_usdt} USDT\n\n"
         else:
             result += "佣金：0.0 (RMB) | 0.0 USDT\n\n"
-
         result += (
-            f"应下发：{amount_after_fee} ({currency}) | {amount_in_usdt} (USDT)\n"
-            f"已下发：{total_issued} ({currency}) | 0.00 (USDT)\n"
-            f"未下发：{total_unissued} ({currency}) | {amount_in_usdt} (USDT)\n\n"
+            f"应下发：{total_pending_rmb} ({currency}) | {total_pending_usdt} (USDT)\n"
+            f"已下发：{total_issued_rmb} ({currency}) | {total_issued_usdt} (USDT)\n"
+            f"未下发：{total_unissued_rmb} ({currency}) | {total_unissued_usdt} (USDT)\n\n"
         )
-
-        if commission_rate > 0:
-            result += f"中介佣金应下发：{commission_rmb} ({currency}) | {commission_usdt} (USDT)\n"
+        result += (
+            f"中介佣金应下发：{commission_rmb} ({currency}) | {commission_usdt} (USDT)\n"
+        )
 
         bot.reply_to(msg, result)
 
