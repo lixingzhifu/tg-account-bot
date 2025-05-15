@@ -230,8 +230,10 @@ def cmd_reset(msg):
     bot.reply_to(msg, "✅ 记录已清零！")
 
 # —— 启动轮询 —— #
+# …… 前面是各种 @bot.message_handler ……
+
+# —— 启动轮询 —— #
 if __name__ == '__main__':
-    # 再次清理，跳过所有旧消息，立刻开始拉新消息
     bot.delete_webhook(drop_pending_updates=True)
     bot.remove_webhook()
     bot.infinity_polling(skip_pending=True)
