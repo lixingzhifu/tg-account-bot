@@ -132,27 +132,32 @@ def handle_deposit(msg):
     user_id = msg.from_user.id
 
     try:
-        cursor.execute("SELECT * FROM settings WHERE chat_id = %s AND user_id = %s", (chat_id, user_id))
+        # 读取用户设置
+        cursor.execute("SELECT * FROM settings WHERE chat_id = %s AND user_id = %s",
+                       (chat_id, user_id))
         settings = cursor.fetchone()
         if not settings:
             return bot.reply_to(msg, "❌ 请先“设置交易”并填写汇率，才能入账。")
 
-        match = re.findall(r'[\+入笔]*([0-9]+(\.\d+)?)', msg.text)
+        # 解析金额
+        match = re.findall(r'[\+入笔]*([0-9]+(?:\.[0-9]+)?)', msg.text)
         if not match:
-            return bot.reply_to(msg, "❌ 无效的入账格式。请输入有效的金额，示例：+1000 或 入1000")
+            return bot.reply_to(msg, "❌ 无效的入账格式。示例：+1000 或 入1000")
 
-        amount = float(match[0][0])
+        amount = float(match[0])
 
-        currency = settings['currency']
-        rate = settings['rate']
-        fee_rate = settings['fee_rate']
+        # 获取汇率等设置
+        currency        = settings['currency']
+        rate            = settings['rate']
+        fee_rate        = settings['fee_rate']
         commission_rate = settings['commission_rate']
 
-        amount_after_fee = amount * (1 - fee_rate / 100)  # 扣除手续费后的金额
-        amount_in_usdt = round(amount_after_fee / rate, 2)  # 转换为 USDT
-        commission_rmb = round(amount * (commission_rate / 100), 2)  # 佣金（人民币）
-        commission_usdt = round(commission_rmb / rate, 2)  # 佣金（USDT）
-
+        # 计算各项
+        amount_after_fee = amount * (1 - fee_rate / 100)
+        amount_in_usdt   = round(amount_after_fee / rate, 2)
+        commission_rmb   = round(amount * (commission_rate / 100), 2)
+        commission_usdt  = round(commission_rmb / rate, 2)
+      
         # 获取当前时间（马来西亚时区）
         malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
         time_now = datetime.now(malaysia_tz).strftime('%H:%M:%S')
