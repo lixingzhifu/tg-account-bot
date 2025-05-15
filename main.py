@@ -104,7 +104,7 @@ def handle_deposit(msg):
     chat_id, user_id = msg.chat.id, msg.from_user.id
 
     try:
-        # 1) 读取设置
+        # ——— 1) 读取用户设置 ———
         cursor.execute(
             "SELECT * FROM settings WHERE chat_id=%s AND user_id=%s",
             (chat_id, user_id)
@@ -113,17 +113,17 @@ def handle_deposit(msg):
         if not s:
             return bot.reply_to(msg, "❌ 请先 /trade 设置交易参数。")
 
-        # —— 确保下面能用到的变量都已定义 —— #
-        currency   = s['currency']
-        rate       = s['rate']
-        fee_rate   = s['fee_rate']
-        comm_rate  = s['commission_rate']
+        # ——— 定义要用的参数 ———
+        currency  = s['currency']
+        rate      = s['rate']
+        fee_rate  = s['fee_rate']
+        comm_rate = s['commission_rate']
 
-        # 2) 解析入账金额
+        # ——— 2) 解析入账金额 ———
         amt = float(re.findall(r'[\+入笔]+([\d.]+)', msg.text)[0])
         after_fee = round(amt * (1 - fee_rate/100), 2)
 
-        # 3) 写入交易
+        # ——— 3) 写入交易记录 ———
         cursor.execute("""
           INSERT INTO transactions
             (chat_id,user_id,name,amount,rate,fee_rate,commission_rate,
@@ -136,7 +136,7 @@ def handle_deposit(msg):
         ))
         conn.commit()
 
-        # 4) 汇总全量：总笔数 & 总入款 & 总应下发
+        # ——— 4) 全量统计 ———
         cursor.execute(
             "SELECT COUNT(*) AS cnt FROM transactions WHERE chat_id=%s AND user_id=%s",
             (chat_id, user_id)
@@ -155,51 +155,53 @@ def handle_deposit(msg):
         ti_usdt = round(total_issued   / rate, 2)
         tu_usdt = round(total_unissued / rate, 2)
 
-        # 5) 取“今日”UTC 时间范围
-        import pytz
-        from datetime import datetime, timedelta
-        tz = pytz.timezone('Asia/Kuala_Lumpur')
-        now_loc    = datetime.now(tz)
-        start_loc  = now_loc.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_loc    = start_loc + timedelta(days=1)
-        start_utc  = start_loc.astimezone(pytz.utc)
-        end_utc    = end_loc.astimezone(pytz.utc)
-
-        # 拉取今日所有入笔/删单 且累加佣金
+        # ——— 5) 拉取所有记录，交给 Python 判断「今天」 ———
         cursor.execute("""
           SELECT id, date, amount, fee_rate, rate, name, commission_rate
           FROM transactions
-          WHERE chat_id=%s
-            AND user_id=%s
-            AND date >= %s AND date < %s
+          WHERE chat_id=%s AND user_id=%s
           ORDER BY date
-        """, (chat_id, user_id, start_utc, end_utc))
-        rows = cursor.fetchall()
+        """, (chat_id, user_id))
+        all_rows = cursor.fetchall()
+
+        import pytz
+        from datetime import datetime
+        local_tz = pytz.timezone('Asia/Kuala_Lumpur')
+        today    = datetime.now(local_tz).date()
 
         lines = []
         positive_count = 0
         total_comm_rmb = 0.0
-        for r in rows:
+
+        for r in all_rows:
+            # 转换到本地时间判断日期
+            dt_utc = r['date'].replace(tzinfo=pytz.utc)
+            dt_loc = dt_utc.astimezone(local_tz)
+            if dt_loc.date() != today:
+                continue
+
             a = r['amount']
-            sign   = '+' if a>0 else '-'
+            sign   = '+' if a > 0 else '-'
             abs_a  = abs(a)
             after2 = abs_a * (1 - r['fee_rate']/100)
             u2     = round(after2 / r['rate'], 2)
-            # 将 UTC 存储的 timestamp 转本地显示
-            dt_utc = r['date'].replace(tzinfo=pytz.utc)
-            ts     = dt_utc.astimezone(tz).strftime('%H:%M:%S')
+            ts     = dt_loc.strftime('%H:%M:%S')
 
             lines.append(
                 f"{r['id']:03d}. {ts}  {sign}{abs_a} * {1 - r['fee_rate']/100} / {r['rate']} = {u2}  {r['name']}"
             )
-            if a>0: positive_count += 1
+            if a > 0:
+                positive_count += 1
             total_comm_rmb += abs_a * (r['commission_rate']/100)
 
-        # 6) 构造并发送结果
-        text  = f"今日入笔（{positive_count}笔）\n"
-        text += ("\n".join(lines)+"\n\n") if lines else "\n\n"
-        text += "今日下发（0笔）\n\n"
-        text += (
+        # ——— 6) 构造并回复 ———
+        res  = f"今日入笔（{positive_count}笔）\n"
+        if lines:
+            res += "\n".join(lines) + "\n\n"
+        else:
+            res += "\n\n"
+        res += "今日下发（0笔）\n\n"
+        res += (
             f"已入款（{cnt}笔）：{total_amt} ({currency})\n\n"
             f"应下发：{total_pending} ({currency}) | {tp_usdt} (USDT)\n"
             f"已下发：{total_issued} ({currency}) | {ti_usdt} (USDT)\n"
@@ -208,7 +210,7 @@ def handle_deposit(msg):
             f"佣金已下发：0.0 ({currency}) | 0.00 (USDT)\n"
             f"佣金未下发：{round(total_comm_rmb,2)} ({currency}) | {round(total_comm_rmb/rate,2)} (USDT)\n"
         )
-        bot.reply_to(msg, text)
+        bot.reply_to(msg, res)
         return
 
     except Exception as e:
