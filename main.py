@@ -10,14 +10,12 @@ from datetime import datetime
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# —— Bot 实例 —— #
+# —— Bot 实例 & 数据库连接 —— #
 bot = TeleBot(TOKEN)
-
-# —— 数据库连接 —— #
 conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 cursor = conn.cursor()
 
-# —— 初始化建表（只会创建，不会覆盖） —— #
+# —— 初始化建表 —— #
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS settings (
   chat_id         BIGINT NOT NULL,
@@ -42,81 +40,65 @@ CREATE TABLE IF NOT EXISTS transactions (
   currency         TEXT    NOT NULL,
   date             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   message_id       BIGINT,
-  status           TEXT DEFAULT 'pending', -- 状态字段
-  deducted_amount  DOUBLE PRECISION DEFAULT 0.0, -- 扣除金额
-  issued_amount    DOUBLE PRECISION DEFAULT 0.0, -- 已下发金额
-  unissued_amount  DOUBLE PRECISION DEFAULT 0.0 -- 未下发金额
+  status           TEXT DEFAULT 'pending',
+  deducted_amount  DOUBLE PRECISION DEFAULT 0.0
 );
 """)
 conn.commit()
 
-# —— /start & “记账” 命令 —— #
+# —— /start & 记账 —— #
 @bot.message_handler(commands=['start'])
 def cmd_start(msg):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(types.KeyboardButton('/trade'), types.KeyboardButton('设置交易'))
-    bot.reply_to(msg,
-        "欢迎使用 LX 记账机器人 ✅\n"
-        "请选择菜单：",
-        reply_markup=kb
-    )
+    kb.add(types.KeyboardButton('/trade'), types.KeyboardButton('记账'))
+    bot.reply_to(msg, "欢迎使用 LX 记账机器人 ✅\n请选择菜单：", reply_markup=kb)
 
 @bot.message_handler(func=lambda m: m.text == '记账')
-def cmd_start_alias(msg):
+def alias_start(msg):
     cmd_start(msg)
 
-# —— 设置交易配置 —— #
+# —— 设置交易 —— #
 @bot.message_handler(func=lambda m: re.match(r'^(/trade|设置交易)', m.text or ''))
 def cmd_set_trade(msg):
     text = msg.text.strip()
     if '设置交易指令' not in text:
         return bot.reply_to(msg,
-            "请按下面格式发送：\n"
+            "请按格式发送：\n"
             "设置交易指令\n"
             "设置货币：RMB\n"
             "设置汇率：0\n"
             "设置费率：0\n"
             "中介佣金：0.0"
         )
-
     try:
         currency = re.search(r'设置货币[:：]\s*([^\s\n]+)', text).group(1)
-        rate = float(re.search(r'设置汇率[:：]\s*([0-9]+(?:\.[0-9]+)?)', text).group(1))
-        fee = float(re.search(r'设置费率[:：]\s*([0-9]+(?:\.[0-9]+)?)', text).group(1))
-        comm = float(re.search(r'中介佣金[:：]\s*([0-9]+(?:\.[0-9]+)?)', text).group(1))
-    except Exception:
-        return bot.reply_to(msg, "❌ 参数解析失败，请务必按格式填：\n设置交易指令\n设置货币：RMB\n设置汇率：0\n设置费率：0\n中介佣金：0.0")
-
-    chat_id = msg.chat.id
-    user_id = msg.from_user.id
-
+        rate = float(re.search(r'设置汇率[:：]\s*([\d.]+)', text).group(1))
+        fee  = float(re.search(r'设置费率[:：]\s*([\d.]+)', text).group(1))
+        comm = float(re.search(r'中介佣金[:：]\s*([\d.]+)', text).group(1))
+    except:
+        return bot.reply_to(msg, "❌ 格式错误，请严格按指示填写。")
+    chat_id, user_id = msg.chat.id, msg.from_user.id
     try:
         cursor.execute("""
-        INSERT INTO settings (chat_id, user_id, currency, rate, fee_rate, commission_rate)
-        VALUES (%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (chat_id, user_id) DO UPDATE
-          SET currency = EXCLUDED.currency,
-              rate = EXCLUDED.rate,
-              fee_rate = EXCLUDED.fee_rate,
-              commission_rate = EXCLUDED.commission_rate;
-        """, (chat_id, user_id, currency, rate, fee, comm))
+        INSERT INTO settings(chat_id,user_id,currency,rate,fee_rate,commission_rate)
+        VALUES(%s,%s,%s,%s,%s,%s)
+        ON CONFLICT(chat_id,user_id) DO UPDATE
+          SET currency=EXCLUDED.currency, rate=EXCLUDED.rate,
+              fee_rate=EXCLUDED.fee_rate, commission_rate=EXCLUDED.commission_rate
+        """, (chat_id,user_id,currency,rate,fee,comm))
         conn.commit()
+        bot.reply_to(msg, f"✅ 设置成功\n货币：{currency}\n汇率：{rate}\n费率：{fee}%\n佣金率：{comm}%")
     except Exception as e:
         conn.rollback()
-        return bot.reply_to(msg, f"❌ 存储失败：{e}")
+        bot.reply_to(msg, f"❌ 存储失败：{e}")
 
-    bot.reply_to(msg, f"✅ 设置成功\n设置货币：{currency}\n设置汇率：{rate}\n设置费率：{fee}\n中介佣金：{comm}")
-
-# —— 计算重启 —— #
+# —— 计算重置 —— #
 @bot.message_handler(commands=['calculate_reset', 'reset'])
-def cmd_reset_calculations(msg):
-    chat_id = msg.chat.id
-    user_id = msg.from_user.id
-
+def cmd_reset(msg):
+    chat_id, user_id = msg.chat.id, msg.from_user.id
     try:
-        # 删除当前用户所有的 transactions，彻底清零
         cursor.execute(
-            "DELETE FROM transactions WHERE chat_id = %s AND user_id = %s",
+            "DELETE FROM transactions WHERE chat_id=%s AND user_id=%s",
             (chat_id, user_id)
         )
         conn.commit()
@@ -125,12 +107,91 @@ def cmd_reset_calculations(msg):
         conn.rollback()
         bot.reply_to(msg, f"❌ 重置失败：{e}")
 
-又跑回来这个.....刚才不是解决了吗
+# —— 入账（记录交易） —— #
+@bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
+def handle_deposit(msg):
+    chat_id, user_id = msg.chat.id, msg.from_user.id
+    try:
+        # --- 取设置 ---
+        cursor.execute("SELECT * FROM settings WHERE chat_id=%s AND user_id=%s",
+                       (chat_id,user_id))
+        s = cursor.fetchone()
+        if not s:
+            return bot.reply_to(msg, "❌ 请先 /trade 设置交易参数。")
 
-❌ 存储失败：column "issued\_amount" of relation "transactions" does not exist
-LINE 4: ...           currency, message\_id, deducted\_amount, issued\_amo...
+        # --- 解析金额 ---
+        m = re.findall(r'[\+入笔]*([0-9]+(?:\.[0-9]+)?)', msg.text)
+        if not m:
+            return bot.reply_to(msg, "❌ 格式示例：+1000 或 入1000")
+        amount = float(m[0])
 
-# —— 启动轮询 —— #
+        # --- 参数 ---
+        currency, rate = s['currency'], s['rate']
+        fee_rate, comm_rate = s['fee_rate'], s['commission_rate']
+        # 计算
+        after_fee = amount * (1 - fee_rate/100)
+        usdt_val = round(after_fee/rate,2)
+        comm_rmb = round(amount*(comm_rate/100),2)
+        comm_usdt= round(comm_rmb/rate,2)
+
+        # --- 时间与编号 ---
+        tz = pytz.timezone('Asia/Kuala_Lumpur')
+        t = datetime.now(tz).strftime('%H:%M:%S')
+        cursor.execute("SELECT COUNT(*) AS cnt FROM transactions WHERE chat_id=%s AND user_id=%s",
+                       (chat_id,user_id))
+        cnt = cursor.fetchone()['cnt'] + 1
+        tid = str(cnt).zfill(3)
+
+        # --- 插入 only 必有列 ---
+        cursor.execute("""
+        INSERT INTO transactions
+          (chat_id,user_id,name,amount,rate,fee_rate,commission_rate,
+           currency,message_id,deducted_amount)
+        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (
+            chat_id, user_id, msg.from_user.username,
+            amount, rate, fee_rate, comm_rate,
+            currency, msg.message_id, after_fee
+        ))
+        conn.commit()
+
+        # --- 汇总总入款 & 应下发 ---
+        cursor.execute("""
+        SELECT SUM(amount) AS sa, SUM(deducted_amount) AS sp
+        FROM transactions WHERE chat_id=%s AND user_id=%s
+        """, (chat_id,user_id))
+        row = cursor.fetchone()
+        total_amt      = float(row['sa'] or 0)
+        total_pending  = float(row['sp'] or 0)
+        total_issued   = 0.0
+        total_unissued = total_pending  # minus 0
+
+        # USDT 计算
+        tp_usdt = round(total_pending/rate,2)
+        ti_usdt = round(total_issued /rate,2)
+        tu_usdt = round(total_unissued/rate,2)
+
+        # --- 构造回复 ---
+        res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
+        res += f"{tid}. {t} {amount} * {1-fee_rate/100} / {rate} = {usdt_val}  {msg.from_user.username}\n"
+        if comm_rate>0:
+            res += f"{tid}. {t} {amount} * {comm_rate/100} = {comm_rmb} 【佣金】\n\n"
+        res += (
+            f"已入款（{cnt}笔）：{total_amt} ({currency})\n\n"
+            f"汇率：{rate}\n费率：{fee_rate}%\n"
+            f"佣金：{comm_rmb} ({currency}) | {comm_usdt} USDT\n\n"
+            f"应下发：{total_pending} ({currency}) | {tp_usdt} (USDT)\n"
+            f"已下发：{total_issued} ({currency}) | {ti_usdt} (USDT)\n"
+            f"未下发：{total_unissued} ({currency}) | {tu_usdt} (USDT)\n\n"
+            f"中介佣金应下发：{comm_rmb} ({currency}) | {comm_usdt} (USDT)\n"
+        )
+        bot.reply_to(msg, res)
+
+    except Exception as e:
+        conn.rollback()
+        bot.reply_to(msg, f"❌ 存储失败：{e}")
+
+# —— 启动 —— #
 if __name__ == '__main__':
-    bot.remove_webhook()  # 确保没有 webhook
-    bot.infinity_polling()  # 永久轮询
+    bot.remove_webhook()
+    bot.infinity_polling()
