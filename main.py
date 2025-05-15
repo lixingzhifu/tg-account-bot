@@ -163,6 +163,7 @@ def handle_deposit(msg):
         """, (chat_id, user_id))
         all_rows = cursor.fetchall()
 
+        # 马来西亚今天的日期
         malaysia    = pytz.timezone('Asia/Kuala_Lumpur')
         today_local = datetime.now(malaysia).date()
 
@@ -171,10 +172,11 @@ def handle_deposit(msg):
         total_comm_rmb = 0.0
 
         for r in all_rows:
+            # 跳过无日期
             if not r['date']:
                 continue
-            local_dt = r['date'].astimezone(malaysia)
-            if local_dt.date() != today_local:
+            # 直接用 date.date() 跟本地今天比对
+            if r['date'].date() != today_local:
                 continue
 
             amt = r['amount']
@@ -182,13 +184,16 @@ def handle_deposit(msg):
             abs_amt = abs(amt)
             after_fee = abs_amt * (1 - r['fee_rate']/100)
             usdt = round(after_fee / r['rate'], 2)
-            ts = local_dt.strftime('%H:%M:%S')
+            # 直接用原生时间字符串
+            ts = r['date'].strftime('%H:%M:%S')
 
             lines.append(
                 f"{r['id']:03d}. {ts}  {sign}{abs_amt} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}"
             )
             if amt > 0:
                 positive_count += 1
+
+            # 累积佣金
             total_comm_rmb += abs_amt * (r['commission_rate']/100)
 
         # 8) 底部汇总
