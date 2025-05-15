@@ -145,47 +145,65 @@ def handle_deposit(msg):
         ti_usdt = round(total_issued   / s['rate'], 2)
         tu_usdt = round(total_unissued / s['rate'], 2)
 
-        # 5) 拉取“今日入笔/删除”列表 & 累积今日佣金
+                # --- 取今日入笔/删除 & 累积今日佣金 --- #
+        malaysia = pytz.timezone('Asia/Kuala_Lumpur')
+        now_local   = datetime.now(malaysia)
+        start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_local   = start_local + timedelta(days=1)
+        # 转为 UTC，跟 DB 存的 timestamp 对齐
+        start_utc = start_local.astimezone(pytz.utc)
+        end_utc   = end_local.astimezone(pytz.utc)
+
         cursor.execute("""
-          SELECT id, date, amount, fee_rate, rate, name, commission_rate
-          FROM transactions
-          WHERE chat_id=%s AND user_id=%s
-            AND date::date = CURRENT_DATE
-          ORDER BY date
-        """, (chat_id, user_id))
+            SELECT id, date, amount, fee_rate, rate, name, commission_rate
+            FROM transactions
+            WHERE chat_id = %s
+              AND user_id = %s
+              AND date >= %s AND date < %s
+            ORDER BY date
+        """, (chat_id, user_id, start_utc, end_utc))
         rows = cursor.fetchall()
 
         lines = []
         positive_count = 0
         total_comm_rmb = 0.0
+
         for r in rows:
-            amt2 = r['amount']
-            sign = '+' if amt2 > 0 else '-'
-            abs_amt = abs(amt2)
-            after2 = abs_amt * (1 - r['fee_rate']/100)
-            usdt2 = round(after2 / r['rate'], 2)
-            ts = r['date'].strftime('%H:%M:%S')
+            amt = r['amount']
+            sign = '+' if amt > 0 else '-'
+            abs_amt = abs(amt)
+            after = abs_amt * (1 - r['fee_rate']/100)
+            usdt = round(after / r['rate'], 2)
+            # DB 返回的是 UTC naive，先当成 UTC，再转本地
+            dt_utc = r['date'].replace(tzinfo=pytz.utc)
+            ts = dt_utc.astimezone(malaysia).strftime('%H:%M:%S')
+
             lines.append(
-                f"{r['id']:03d}. {ts}  {sign}{abs_amt} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt2}  {r['name']}"
+                f"{r['id']:03d}. {ts}  {sign}{abs_amt} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}"
             )
-            if amt2 > 0:
+            if amt > 0:
                 positive_count += 1
             total_comm_rmb += abs_amt * (r['commission_rate']/100)
+        # --- 今日列表结束 --- #
 
-        # 6) 构造并发送回复
-        text  = f"今日入笔（{positive_count}笔）\n"
-        text += ("\n".join(lines) + "\n\n") if lines else "\n\n"
-        text += "今日下发（0笔）\n\n"
-        text += (
-            f"已入款（{cnt}笔）：{total_amt} ({s['currency']})\n\n"
-            f"应下发：{total_pending} ({s['currency']}) | {tp_usdt} (USDT)\n"
-            f"已下发：{total_issued} ({s['currency']}) | {ti_usdt} (USDT)\n"
-            f"未下发：{total_unissued} ({s['currency']}) | {tu_usdt} (USDT)\n\n"
-            f"佣金应下发：{round(total_comm_rmb,2)} ({s['currency']}) | {round(total_comm_rmb/s['rate'],2)} (USDT)\n"
-            f"佣金已下发：0.0 ({s['currency']}) | 0.00 (USDT)\n"
-            f"佣金未下发：{round(total_comm_rmb,2)} ({s['currency']}) | {round(total_comm_rmb/s['rate'],2)} (USDT)\n"
+        # 构造最终回复
+        res  = f"今日入笔（{positive_count}笔）\n"
+        if lines:
+            res += "\n".join(lines) + "\n\n"
+        else:
+            res += "\n\n"
+        res += "今日下发（0笔）\n\n"
+        # （下面是你原来的底部统计，保持不变）
+        res += (
+            f"已入款（{cnt}笔）：{total_amt} ({currency})\n\n"
+            f"应下发：{total_pending} ({currency}) | {tp_usdt} (USDT)\n"
+            f"已下发：{total_issued} ({currency}) | {ti_usdt} (USDT)\n"
+            f"未下发：{total_unissued} ({currency}) | {tu_usdt} (USDT)\n\n"
+            f"佣金应下发：{round(total_comm_rmb,2)} ({currency}) | {round(total_comm_rmb/rate,2)} (USDT)\n"
+            f"佣金已下发：0.0 ({currency}) | 0.00 (USDT)\n"
+            f"佣金未下发：{round(total_comm_rmb,2)} ({currency}) | {round(total_comm_rmb/rate,2)} (USDT)\n"
         )
-        bot.reply_to(msg, text)
+        bot.reply_to(msg, res)
         return
 
     except Exception as e:
