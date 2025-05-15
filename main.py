@@ -174,8 +174,13 @@ def handle_deposit(msg):
         positive_count = 0
         total_comm_rmb = 0.0
 
+                # ----- “今日入笔”筛选（加上 date 不为 None 的判断） ----- 
         for r in all_rows:
-            # 转成本地时间再判定是否“今日”
+            if not r['date']:
+                # 跳过没有时间戳的记录
+                continue
+
+            # 转成本地时间
             local_dt = r['date'].astimezone(malaysia)
             if local_dt.date() != today_local:
                 continue
@@ -187,14 +192,12 @@ def handle_deposit(msg):
             usdt = round(after_fee / r['rate'], 2)
             ts = local_dt.strftime('%H:%M:%S')
 
-            # 加入列表
             lines.append(
                 f"{r['id']:03d}. {ts}  {sign}{abs_amt} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}"
             )
             if amt > 0:
                 positive_count += 1
 
-            # 累积佣金，本地币
             total_comm_rmb += abs_amt * (r['commission_rate']/100)
 
         # 构造“今日入笔”与“今日下发”部分
