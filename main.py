@@ -173,30 +173,39 @@ def handle_deposit(msg):
         ti_usdt = round(total_issued/rate,2)
         tu_usdt = round(total_unissued/rate,2)
 
-        # —— 构造 今日入笔 列表 —— #
-        start_local = tz.localize(datetime.combine(now_local.date(), datetime.min.time()))
-        end_local   = start_local + timedelta(days=1)
-        cursor.execute("""
-        SELECT id, date, amount, fee_rate, rate, commission_rate, name
-        FROM transactions
-        WHERE chat_id=%s AND user_id=%s AND date >= %s AND date < %s
-        ORDER BY date
-        """, (chat_id, user_id, start_local, end_local))
-        today_rows = cursor.fetchall()
-        lines_deposit = []
-        for r in today_rows:
-            amt = r['amount']
-            sign = '+' if amt>0 else '-'
-            abs_amt = abs(amt)
-            ts = r['date'].astimezone(tz).strftime('%H:%M:%S')
-            usd = round(abs_amt*(1-r['fee_rate']/100)/r['rate'],2)
-            if amt > 0:
-                lines_deposit.append(f"{r['id']:03d}. {ts} {sign}{abs_amt} * {1-r['fee_rate']/100} / {r['rate']} = {usd}  {r['name']}")
-        deposit_count = len(lines_deposit)
+           # —— “今日入笔” & “今日下发” —— #
+    # 1) 先算当地“今天”在 UTC 的范围
+    malaysia = pytz.timezone('Asia/Kuala_Lumpur')
+    now_local = datetime.now(malaysia)
+    today      = now_local.date()
+    start_local = malaysia.localize(datetime.combine(today, datetime.min.time()))
+    end_local   = start_local + timedelta(days=1)
+    start_utc = start_local.astimezone(pytz.utc)
+    end_utc   = end_local.astimezone(pytz.utc)
 
-        # —— 今日下发 暂无，保持0 —— #
-        withdraw_count = 0
-        lines_withdraw = []
+    # 2) 拉取今天的所有入笔记录（含正负）、并统计笔数
+    cursor.execute("""
+      SELECT id, date, amount, fee_rate, rate, name
+      FROM transactions
+      WHERE chat_id=%s AND user_id=%s
+        AND date >= %s AND date < %s
+      ORDER BY date
+    """, (chat_id, user_id, start_utc, end_utc))
+    today_rows = cursor.fetchall()
+
+    daily_lines = []
+    for r in today_rows:
+        amt = r['amount']
+        after = amt * (1 - r['fee_rate']/100)
+        usdt  = round(after / r['rate'], 2)
+        # 把数据库里的 UTC 时间转回本地时区再格式化
+        ts = r['date'].replace(tzinfo=pytz.utc).astimezone(malaysia).strftime('%H:%M:%S')
+        sign = '+' if amt>0 else ''
+        daily_lines.append(f"{r['id']:03d}. {ts} {sign}{amt} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}")
+    daily_cnt = len(daily_lines)
+
+    # 3) （今天暂不支持“已下发”明细，先留空）
+    issued_cnt = 0
 
         # —— 构造回复 —— #
         res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
