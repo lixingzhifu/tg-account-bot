@@ -160,33 +160,38 @@ def handle_deposit(msg):
         ))
         conn.commit()
 
-        # 6) —— 今天所有入笔/删除记录列表（按马来西亚“今日”区间） —— #
-        today = now_local.date()
-        start_local = malaysia.localize(datetime.combine(today, datetime.min.time()))
-        end_local   = start_local + timedelta(days=1)
-        start_utc = start_local.astimezone(pytz.utc)
-        end_utc   = end_local.astimezone(pytz.utc)
+           # 6) —— 今天所有入笔/删除记录列表 —— #
+    cursor.execute("""
+        SELECT id, date, amount, fee_rate, rate, name
+        FROM transactions
+        WHERE chat_id = %s
+          AND user_id = %s
+          -- 将 UTC 时间 +8 小时后取日期，等于当前日期
+          AND (date + INTERVAL '8 hours')::date = CURRENT_DATE
+        ORDER BY date
+    """, (chat_id, user_id))
+    rows = cursor.fetchall()
 
-        cursor.execute("""
-            SELECT id, date, amount, fee_rate, rate, name
-            FROM transactions
-            WHERE chat_id=%s AND user_id=%s
-              AND date >= %s AND date < %s
-            ORDER BY date
-        """, (chat_id, user_id, start_utc, end_utc))
-        rows = cursor.fetchall()
+    lines = []
+    positive_count = 0
+    for r in rows:
+        sign = '+' if r['amount'] > 0 else '-'
+        amt = abs(r['amount'])
+        after = amt * (1 - r['fee_rate']/100)
+        usdt = round(after / r['rate'], 2)
+        # 这里直接把原 UTC 时间也 +8 小时再展示
+        ts = (r['date'] + timedelta(hours=8)).strftime('%H:%M:%S')
+        lines.append(
+            f"{r['id']:03d}. {ts}  {sign}{amt} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}"
+        )
+        if r['amount'] > 0:
+            positive_count += 1
 
-        lines = []
-        positive_count = 0
-        for r in rows:
-            sign = '+' if r['amount'] > 0 else '-'
-            amt = abs(r['amount'])
-            after = amt * (1 - r['fee_rate']/100)
-            usdt = round(after / r['rate'], 2)
-            ts = r['date'].astimezone(malaysia).strftime('%H:%M:%S')
-            lines.append(f"{r['id']:03d}. {ts}  {sign}{amt} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}")
-            if r['amount'] > 0:
-                positive_count += 1
+    # 构造“今日入笔”
+    result = f"今日入笔（{positive_count}笔）\n"
+    if lines:
+        result += "\n".join(lines)
+    result += "\n\n今日下发（0笔）\n\n"
 
         # 7) 汇总总入款 & 应下发
         cursor.execute("""
