@@ -208,17 +208,17 @@ def handle_deposit(msg):
     issued_cnt = 0
 
         # —— 构造回复 —— #
-        res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
-        res += f"{tid}. {t} {amount} * {1-fee_rate/100} / {rate} = {usdt_val}  {msg.from_user.username}\n"
-        if comm_rate>0:
-            res += f"{tid}. {t} {amount} * {comm_rate/100} = {comm_rmb} 【佣金】\n\n"
-        # 今日入笔 & 今日下发
-        res += f"今日入笔（{deposit_count}笔）\n"
-        for line in lines_deposit:
-            res += line + "\n"
-        res += f"\n今日下发（{withdraw_count}笔）\n"
-        for line in lines_withdraw:
-            res += line + "\n"
+res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
+res += f"{tid}. {t} {amount} * {1-fee_rate/100} / {rate} = {usdt_val}  {msg.from_user.username}\n"
+if comm_rate>0:
+    res += f"{tid}. {t} {amount} * {comm_rate/100} = {comm_rmb} 【佣金】\n\n"
+
+# —— 加上「今日入笔」与「今日下发」块 —— #
+res += f"今日入笔（{daily_cnt}笔）\n"
+if daily_lines:
+    res += "\n" + "\n".join(daily_lines) + "\n\n"
+res += f"今日下发（{issued_cnt}笔）\n\n"
+        
         # 汇总数据
         res += (
             f"\n已入款（{cnt}笔）：{total_amt} ({currency})\n"
