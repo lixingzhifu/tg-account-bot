@@ -108,24 +108,20 @@ def cmd_set_trade(msg):
     bot.reply_to(msg, f"✅ 设置成功\n设置货币：{currency}\n设置汇率：{rate}\n设置费率：{fee}\n中介佣金：{comm}")
 
 # —— 计算重启 —— #
-@bot.message_handler(commands=['calculate_reset'])
+@bot.message_handler(commands=['calculate_reset', 'reset'])
 def cmd_reset_calculations(msg):
     chat_id = msg.chat.id
     user_id = msg.from_user.id
 
     try:
-        # 清除所有计算的状态
-        cursor.execute("""
-        UPDATE transactions
-        SET deducted_amount = 0, issued_amount = 0, unissued_amount = 0
-        WHERE chat_id = %s AND user_id = %s
-        """, (chat_id, user_id))
+        # 删除当前用户所有的 transactions，彻底清零
+        cursor.execute(
+            "DELETE FROM transactions WHERE chat_id = %s AND user_id = %s",
+            (chat_id, user_id)
+        )
         conn.commit()
-
-        # 回复用户
-        bot.reply_to(msg, "✅ 记录已清零！所有已下发金额和应下发金额已清零。")
+        bot.reply_to(msg, "✅ 记录已清零！所有交易数据已删除，从头开始计算。")
     except Exception as e:
-        # 捕获并打印错误
         conn.rollback()
         bot.reply_to(msg, f"❌ 重置失败：{e}")
 
