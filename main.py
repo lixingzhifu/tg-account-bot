@@ -231,6 +231,9 @@ def cmd_reset(msg):
 
 # —— 启动轮询 —— #
 if __name__ == '__main__':
-    bot.delete_webhook()
+    if __name__ == '__main__':
+      
+    # 再次清理，跳过所有旧消息，立刻开始拉新消息
+    bot.delete_webhook(drop_pending_updates=True)
     bot.remove_webhook()
-    bot.infinity_polling()
+    bot.infinity_polling(skip_pending=True)
