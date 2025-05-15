@@ -157,61 +157,69 @@ def handle_deposit(msg):
         start_utc = start_local.astimezone(pytz.utc)
         end_utc   = end_local.astimezone(pytz.utc)
 
+                # ----- 下面开始“今日入笔”和“佣金累积”筛选 -----
+        # 取出该用户所有交易
         cursor.execute("""
-            SELECT id, date, amount, fee_rate, rate, name
+            SELECT id, date, amount, fee_rate, rate, name, commission_rate
             FROM transactions
-            WHERE chat_id=%s AND user_id=%s
-              AND date >= %s AND date < %s
+            WHERE chat_id = %s AND user_id = %s
             ORDER BY date
-        """, (chat_id, user_id, start_utc, end_utc))
-        rows = cursor.fetchall()
+        """, (chat_id, user_id))
+        all_rows = cursor.fetchall()
+
+        malaysia = pytz.timezone('Asia/Kuala_Lumpur')
+        today_local = datetime.now(malaysia).date()
 
         lines = []
         positive_count = 0
-        for r in rows:
-            sign = '+' if r['amount'] > 0 else '-'
-            amt = abs(r['amount'])
-            after = amt * (1 - r['fee_rate']/100)
-            usdt = round(after / r['rate'], 2)
-            ts = r['date'].astimezone(malaysia).strftime('%H:%M:%S')
-            lines.append(f"{r['id']:03d}. {ts}  {sign}{amt} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}")
-            if r['amount'] > 0:
+        total_comm_rmb = 0.0
+
+        for r in all_rows:
+            # 转成本地时间再判定是否“今日”
+            local_dt = r['date'].astimezone(malaysia)
+            if local_dt.date() != today_local:
+                continue
+
+            amt = r['amount']
+            sign = '+' if amt > 0 else '-'
+            abs_amt = abs(amt)
+            after_fee = abs_amt * (1 - r['fee_rate']/100)
+            usdt = round(after_fee / r['rate'], 2)
+            ts = local_dt.strftime('%H:%M:%S')
+
+            # 加入列表
+            lines.append(
+                f"{r['id']:03d}. {ts}  {sign}{abs_amt} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}"
+            )
+            if amt > 0:
                 positive_count += 1
 
-        # 汇总“应/已/未 下发”
-        cursor.execute("""
-            SELECT SUM(amount) AS sum_amt,
-                   SUM(deducted_amount) AS sum_pending
-            FROM transactions
-            WHERE chat_id=%s AND user_id=%s
-        """, (chat_id, user_id))
-        agg = cursor.fetchone()
-        total_amt     = float(agg['sum_amt']     or 0)
-        total_pending = float(agg['sum_pending'] or 0)
-        total_issued  = 0.0
-        total_unissued = total_pending
+            # 累积佣金，本地币
+            total_comm_rmb += abs_amt * (r['commission_rate']/100)
 
-        tp_usdt = round(total_pending  / rate, 2)
-        ti_usdt = round(total_issued   / rate, 2)
-        tu_usdt = round(total_unissued / rate, 2)
-
-        # 构造回复
+        # 构造“今日入笔”与“今日下发”部分
         res  = f"今日入笔（{positive_count}笔）\n"
         if lines:
             res += "\n".join(lines) + "\n\n"
         else:
             res += "\n"
         res += "今日下发（0笔）\n\n"
+
+        # —— 底部原统计保持不变 —— #
         res += (
-            f"已入款（{total_amt/amount:.0f}笔）：{total_amt} ({currency})\n\n"
+            f"已入款（{cnt}笔）：{total_amt} ({currency})\n\n"
             f"应下发：{total_pending} ({currency}) | {tp_usdt} (USDT)\n"
             f"已下发：{total_issued} ({currency}) | {ti_usdt} (USDT)\n"
             f"未下发：{total_unissued} ({currency}) | {tu_usdt} (USDT)\n\n"
-            f"佣金应下发：{round(amount*(comm_rate/100),2)} ({currency}) | {round((amount*(comm_rate/100))/rate,2)} (USDT)\n"
+            f"佣金应下发：{round(total_comm_rmb,2)} ({currency}) | "
+            f"{round(total_comm_rmb/rate,2)} (USDT)\n"
             f"佣金已下发：0.0 ({currency}) | 0.00 (USDT)\n"
-            f"佣金未下发：{round(amount*(comm_rate/100),2)} ({currency}) | {round((amount*(comm_rate/100))/rate,2)} (USDT)\n"
+            f"佣金未下发：{round(total_comm_rmb,2)} ({currency}) | "
+            f"{round(total_comm_rmb/rate,2)} (USDT)\n"
         )
+
         bot.reply_to(msg, res)
+        return
 
     except Exception as e:
         conn.rollback()
