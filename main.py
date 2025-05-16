@@ -186,40 +186,46 @@ def handle_deposit(msg):
         tu_usdt          = round(total_unissued  / rate, 2)
         total_comm_usdt  = round(total_comm_rmb  / rate, 2)
 
-        # 7) 筛“今日入笔”列表（全部用 Python 过滤，不再靠 SQL）
-        cursor.execute("""
-            SELECT id, date, amount, fee_rate, rate, name
-            FROM transactions
-            WHERE chat_id=%s AND user_id=%s
-            ORDER BY date
-        """, (chat_id, user_id))
-        rows = cursor.fetchall()
+    # 7) —— 筛“今日入笔” —— #
+    # 先算出马来西亚时区的“今天”日期
+    tz = pytz.timezone('Asia/Kuala_Lumpur')
+    now_local = datetime.now(tz)
+    today_date = now_local.date()
 
-        daily_lines = []
-        for r in rows:
-    rd = r['date']
-    # 跳过没有 date 的记录
-    if rd is None:
-        continue
+    # 从 transactions 里取出所有记录，后面用 Python 过滤
+    cursor.execute("""
+        SELECT id, date, amount, fee_rate, rate, name
+        FROM transactions
+        WHERE chat_id=%s AND user_id=%s
+        ORDER BY date
+    """, (chat_id, user_id))
+    all_rows = cursor.fetchall()
 
-    # 把无时区的 timestamp 当成 UTC 处理
-    if rd.tzinfo is None:
-        rd = rd.replace(tzinfo=pytz.utc)
+    daily_lines = []
+    for r in all_rows:
+        rd = r['date']
+        # 跳过 date 为 NULL 的条目
+        if rd is None:
+            continue
+        # 把无时区的 timestamp 当成 UTC
+        if rd.tzinfo is None:
+            rd = rd.replace(tzinfo=pytz.utc)
+        # 转到本地时区再判断
+        local_dt = rd.astimezone(tz)
+        if local_dt.date() != today_date:
+            continue
 
-    local_dt = rd.astimezone(tz)
-    if local_dt.date() != today_date:
-        continue
+        ts = local_dt.strftime('%H:%M:%S')
+        amt = r['amount']
+        net = amt * (1 - r['fee_rate']/100)
+        usdt = round(net / r['rate'], 2)
+        sign = '+' if amt > 0 else '-'
+        daily_lines.append(
+            f"{r['id']:03d}. {ts} {sign}{abs(amt)} * "
+            f"{1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}"
+        )
 
-    ts   = local_dt.strftime('%H:%M:%S')
-    amt  = r['amount']
-    net  = amt * (1 - r['fee_rate']/100)
-    usd  = round(net / r['rate'], 2)
-    sign = '+' if amt > 0 else '-'
-    daily_lines.append(
-        f"{r['id']:03d}. {ts} {sign}{abs(amt)} * "
-        f"{1 - r['fee_rate']/100} / {r['rate']} = {usd}  {r['name']}"
-    )
-        daily_cnt = len(daily_lines)
+    daily_cnt = len(daily_lines)
         issued_cnt = 0  # 今天暂不支持“已下发”明细
 
         # 8) 构造并发送回复
