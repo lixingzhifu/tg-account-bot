@@ -179,62 +179,65 @@ def handle_deposit(msg):
         ti_usdt = round(total_issued   / rate, 2)
         tu_usdt = round(total_unissued / rate, 2)
 
-        # 7) 用 SQL 直接筛“今日入笔”
-        today = now_local.date()
-        start_local = tz.localize(datetime.combine(today, datetime.min.time()))
-        end_local   = start_local + timedelta(days=1)
-        start_utc = start_local.astimezone(pytz.utc)
-        end_utc   = end_local.astimezone(pytz.utc)
+    # … 上面已经完成 insert/汇总 total_amt/total_pending 等 ……
 
-        cursor.execute("""
-            SELECT id, date, amount, fee_rate, rate, name
-            FROM transactions
-            WHERE chat_id=%s AND user_id=%s
-              AND date >= %s AND date < %s
-            ORDER BY date
-        """, (chat_id, user_id, start_utc, end_utc))
-        today_rows = cursor.fetchall()
+    # 7) —— 筛“今日入笔” —— #
+    tz = pytz.timezone('Asia/Kuala_Lumpur')
+    now_local  = datetime.now(tz)
+    today_date = now_local.date()
 
-        daily_lines = []
-        for r in today_rows:
-            rd = r['date']
-            if rd.tzinfo is None:
-                rd = rd.replace(tzinfo=pytz.utc)
-            local_dt = rd.astimezone(tz)
-            ts = local_dt.strftime('%H:%M:%S')
-            amt = r['amount']
-            net = amt * (1 - r['fee_rate']/100)
-            usd = round(net / r['rate'], 2)
-            sign = '+' if amt > 0 else '-'
-            daily_lines.append(
-                f"{r['id']:03d}. {ts} {sign}{abs(amt)} * "
-                f"{1 - r['fee_rate']/100} / {r['rate']} = {usd}  {r['name']}"
-            )
-        daily_cnt  = len(daily_lines)
-        issued_cnt = 0  # 今天暂不支持“已下发”明细
+    # 从 transactions 读取所有当日记录，用 Python 过滤
+    cursor.execute("""
+      SELECT id, date, amount, fee_rate, rate, name
+      FROM transactions
+      WHERE chat_id=%s AND user_id=%s
+      ORDER BY date
+    """, (chat_id, user_id))
+    rows = cursor.fetchall()
 
-        # 8) 拼接回复
-        res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
-        res += f"{tid}. {t_str} {amount} * {1-fee_rate/100} / {rate} = {usdt_val}  {msg.from_user.username}\n"
-        if comm_rate > 0:
-            res += f"{tid}. {t_str} {amount} * {comm_rate/100} = {comm_rmb} 【佣金】\n\n"
-
-        res += f"今日入笔（{daily_cnt}笔）\n"
-        if daily_cnt:
-            res += "\n".join(daily_lines) + "\n"
-        res += f"\n今日下发（{issued_cnt}笔）\n\n"
-
-        res += (
-            f"已入款（{cnt}笔）：{total_amt} ({currency})\n"
-            f"汇率：{rate}\n费率：{fee_rate}%\n"
-            f"佣金：{comm_rmb} ({currency}) | {comm_usdt} USDT\n\n"
-            f"应下发：{total_pending} ({currency}) | {tp_usdt} (USDT)\n"
-            f"已下发：{total_issued} ({currency}) | {ti_usdt} (USDT)\n"
-            f"未下发：{total_unissued} ({currency}) | {tu_usdt} (USDT)\n\n"
-            f"中介佣金应下发：{comm_rmb} ({currency}) | {comm_usdt} (USDT)\n"
+    daily_lines = []
+    for r in rows:
+        rd = r['date']
+        # 如果是 naive，就先当成 UTC
+        if rd.tzinfo is None:
+            rd = rd.replace(tzinfo=pytz.utc)
+        local_dt = rd.astimezone(tz)
+        if local_dt.date() != today_date:
+            continue
+        ts   = local_dt.strftime('%H:%M:%S')
+        amt  = r['amount']
+        net  = amt * (1 - r['fee_rate']/100)
+        usd  = round(net / r['rate'], 2)
+        sign = '+' if amt > 0 else '-'
+        daily_lines.append(
+            f"{r['id']:03d}. {ts} {sign}{abs(amt)} * "
+            f"{1 - r['fee_rate']/100} / {r['rate']} = {usd}  {r['name']}"
         )
+    daily_cnt  = len(daily_lines)
+    issued_cnt = 0
 
-        bot.reply_to(msg, res)
+    # 8) —— 构造最终回复，把“今日入笔”放最上面 —— #
+    res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
+    res += f"{tid}. {t_str} {amount} * {1-fee_rate/100} / {rate} = {usdt_val}  {msg.from_user.username}\n"
+    if comm_rate > 0:
+        res += f"{tid}. {t_str} {amount} * {comm_rate/100} = {comm_rmb} 【佣金】\n\n"
+
+    # ← 这里！
+    res += f"今日入笔（{daily_cnt}笔）\n"
+    if daily_cnt:
+        res += "\n".join(daily_lines) + "\n"
+    res += f"\n今日下发（{issued_cnt}笔）\n\n"
+
+    res += (
+        f"已入款（{cnt}笔）：{total_amt} ({currency})\n"
+        f"汇率：{rate}\n费率：{fee_rate}%\n"
+        f"佣金：{comm_rmb} ({currency}) | {comm_usdt} USDT\n\n"
+        f"应下发：{total_pending} ({currency}) | {tp_usdt} (USDT)\n"
+        f"已下发：{total_issued} ({currency}) | {ti_usdt} (USDT)\n"
+        f"未下发：{total_unissued} ({currency}) | {tu_usdt} (USDT)\n\n"
+        f"中介佣金应下发：{comm_rmb} ({currency}) | {comm_usdt} (USDT)\n"
+    )
+    bot.reply_to(msg, res)
 
     except Exception as e:
         conn.rollback()
