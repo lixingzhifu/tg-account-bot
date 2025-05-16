@@ -46,22 +46,27 @@ init_db()
 
 # —— 工具函数 —— #
 def fetch_settings(cid, uid):
-    cursor.execute("SELECT * FROM settings WHERE chat_id=%s AND user_id=%s", (cid, uid))
+    cursor.execute(
+        "SELECT * FROM settings WHERE chat_id=%s AND user_id=%s",
+        (cid, uid)
+    )
     return cursor.fetchone()
 
 def fetch_transactions(cid, uid):
     cursor.execute(
-        "SELECT * FROM transactions WHERE chat_id=%s AND user_id=%s ORDER BY date", (cid, uid)
+        "SELECT * FROM transactions WHERE chat_id=%s AND user_id=%s ORDER BY date",
+        (cid, uid)
     )
     return cursor.fetchall()
 
 def fetch_issuances(cid, uid):
     cursor.execute(
-        "SELECT * FROM issuances WHERE chat_id=%s AND user_id=%s ORDER BY date", (cid, uid)
+        "SELECT * FROM issuances WHERE chat_id=%s AND user_id=%s ORDER BY date",
+        (cid, uid)
     )
     return cursor.fetchall()
 
-# —— 定义格式化汇总 —— #
+# —— 格式化今日汇总 —— #
 def format_summary(cid, uid):
     tz = pytz.timezone('Asia/Kuala_Lumpur')
     today = datetime.now(tz).date()
@@ -75,7 +80,6 @@ def format_summary(cid, uid):
         dt = r['date']
         if dt is None:
             continue
-        # 处理时区：若无 tzinfo，当成 UTC
         if dt.tzinfo is None:
             dt = pytz.utc.localize(dt)
         local_dt = dt.astimezone(tz)
@@ -85,7 +89,7 @@ def format_summary(cid, uid):
         amt  = r['amount']
         ts   = local_dt.strftime('%H:%M:%S')
         netf = 1 - r['fee_rate']/100
-        usd  = round(amt*netf/r['rate'],2)
+        usd  = round(amt*netf/r['rate'], 2)
         line = f"{r['id']:03d}. {ts} {sign}{abs(amt)} * {netf:.2f} / {r['rate']:.1f} = {usd:.2f}"
         if r['status']=='pending':
             pending_lines.append(line)
@@ -107,18 +111,15 @@ def format_summary(cid, uid):
         out_amt = abs(r['amount'])
         out_lines.append(f"{ts} {sign}{out_amt:.2f}")
 
-    # 汇总计算
     total_in = sum(r['amount'] for r in trans if r['status']=='pending')
     comm_due = sum(r['amount']*r['commission_rate']/100 for r in trans if r['status']=='pending')
     total_pending = sum(r['amount']*(1-r['fee_rate']/100) for r in trans if r['status']=='pending')
     issued_amt = sum(r['amount'] for r in issu if r['type']=='fund')
-    comm_issued= sum(r['amount'] for r in issu if r['type']=='commission')
+    comm_issued = sum(r['amount'] for r in issu if r['type']=='commission')
     unissued = total_pending - issued_amt
 
-    s = fetch_settings(cid, uid) or {'rate':0,'fee_rate':0,'commission_rate':0}
-    rate = s['rate']
-    fee  = s['fee_rate']
-    comm = s['commission_rate']
+    s = fetch_settings(cid, uid) or {'rate': 0, 'fee_rate': 0, 'commission_rate': 0}
+    rate = s['rate']; fee = s['fee_rate']; comm = s['commission_rate']
 
     lines = []
     lines.append(f"今日入笔（{len(pending_lines)}笔）")
@@ -141,69 +142,142 @@ def format_summary(cid, uid):
     lines.append(f"佣金未下发：{comm_due-comm_issued:.2f} | {(comm_due-comm_issued)/rate:.2f} (USDT)")
     return "\n".join(lines)
 
-# —— 入账 —— #
-@bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
-def handle_deposit(msg):
+# —— 命令：/start —— #
+@bot.message_handler(commands=['start'])
+def cmd_start(msg):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add('/trade', '/指令大全', '/重置', '/显示账单', '/客服帮助', '/定制机器人')
+    bot.reply_to(msg,
+        "欢迎使用 LX 记账机器人 ✅\n请选择菜单：",
+        reply_markup=kb
+    )
+
+# —— 命令：指令大全 —— #
+@bot.message_handler(commands=['指令大全'])
+def cmd_help(msg):
+    help_text = (
+        "📜 指令大全：\n"
+        "/start - 启动机器人\n"
+        "/trade - 设置交易参数\n"
+        "+1000 / 入1000 / 入笔1000 - 记入款\n"
+        "删除1000 / 撤销入款 - 删除最近一笔\n"
+        "删除编号001 - 删除指定编号（仅当天）\n"
+        "下发1000 / -1000 - 记下发\n"
+        "佣金下发50 - 记佣金下发\n"
+        "/重置 - 清空今日数据\n"
+        "/显示账单 - 查看今日汇总\n"
+        "/客服帮助 - 联系客服\n"
+        "/定制机器人 - 获取定制链接"
+    )
+    bot.reply_to(msg, help_text)
+
+# —— 命令：trade —— #
+@bot.message_handler(commands=['trade'])
+def cmd_trade(msg):
+    bot.reply_to(msg,
+        "设置交易指令\n"
+        "设置汇率：0\n"
+        "设置费率：0\n"
+        "中介佣金：0.0"
+    )
+
+@bot.message_handler(func=lambda m: m.text and m.text.startswith('设置交易指令'))
+def handle_trade(msg):
+    text = msg.text
+    try:
+        rate = float(re.search(r'设置汇率[:：]\s*([\d.]+)', text).group(1))
+        fee  = float(re.search(r'设置费率[:：]\s*([\d.]+)', text).group(1))
+        comm = float(re.search(r'中介佣金[:：]\s*([\d.]+)', text).group(1))
+    except:
+        return bot.reply_to(msg, "❌ 格式错误，请按指示填写。始终填写所有项。")
     cid, uid = msg.chat.id, msg.from_user.id
-    s = fetch_settings(cid,uid)
-    if not s: return bot.reply_to(msg, "❌ 请先 /trade 设置交易参数")
-    amt = float(re.findall(r'[\+入笔]*([0-9]+(?:\.[0-9]+)?)', msg.text)[0])
     cursor.execute(
-        "INSERT INTO transactions(chat_id,user_id,amount,rate,fee_rate,commission_rate)"
-        "VALUES(%s,%s,%s,%s,%s,%s)",
-        (cid,uid,amt,s['rate'],s['fee_rate'],s['commission_rate'])
+        "INSERT INTO settings(chat_id,user_id,rate,fee_rate,commission_rate)"
+        "VALUES(%s,%s,%s,%s,%s) "
+        "ON CONFLICT(chat_id,user_id) DO UPDATE SET rate=EXCLUDED.rate,"
+        "fee_rate=EXCLUDED.fee_rate,commission_rate=EXCLUDED.commission_rate",
+        (cid, uid, rate, fee, comm)
     )
     conn.commit()
-    bot.reply_to(msg, "✅ 已入款 +{:.1f} (RMB)\n\n".format(amt) + format_summary(cid,uid))
-
-# —— 删除最近一笔 —— #
-@bot.message_handler(func=lambda m: re.match(r'^(删除|撤销入款)\d+(\.\d+)?$', m.text or ''))
-def handle_delete(msg):
-    cid, uid = msg.chat.id, msg.from_user.id
-    row = fetch_transactions(cid,uid)[-1] if fetch_transactions(cid,uid) else None
-    if not row: return bot.reply_to(msg, "❌ 无可删除的入账记录")
-    cursor.execute("UPDATE transactions SET status='deleted' WHERE id=%s", (row['id'],))
-    conn.commit()
-    bot.reply_to(msg, f"✅ 订单{row['id']:03d} 已删除 -{row['amount']:.1f} (RMB)\n\n" + format_summary(cid,uid))
-
-# —— 下发 —— #
-@bot.message_handler(func=lambda m: re.match(r'^下发-?\d+(\.\d+)?$', m.text or ''))
-def handle_issuance(msg):
-    cid, uid = msg.chat.id, msg.from_user.id
-    val = float(msg.text.replace('下发',''))
-    cursor.execute(
-        "INSERT INTO issuances(chat_id,user_id,amount,type) VALUES(%s,%s,%s,'fund')",
-        (cid,uid,val)
+    bot.reply_to(msg,
+        f"✅ 设置成功\n汇率：{rate:.1f}\n费率：{fee:.1f}%\n佣金率：{comm:.1f}%"
     )
-    conn.commit()
-    bot.reply_to(msg, "✅ 已记录下发 {:+.2f} USDT\n\n".format(val) + format_summary(cid,uid))
 
-# —— 佣金下发 —— #
-@bot.message_handler(func=lambda m: re.match(r'^佣金下发-?\d+(\.\d+)?$', m.text or ''))
-def handle_comm_issuance(msg):
+# —— 命令：重置 —— #
+@bot.message_handler(commands=['重置','calculate_reset','reset'])
+def cmd_reset(msg):
     cid, uid = msg.chat.id, msg.from_user.id
-    val = float(msg.text.replace('佣金下发',''))
-    cursor.execute(
-        "INSERT INTO issuances(chat_id,user_id,amount,type) VALUES(%s,%s,%s,'commission')",
-        (cid,uid,val)
-    )
+    cursor.execute("DELETE FROM transactions WHERE chat_id=%s AND user_id=%s", (cid, uid))
+    cursor.execute("DELETE FROM issuances   WHERE chat_id=%s AND user_id=%s", (cid, uid))
     conn.commit()
-    bot.reply_to(msg, "✅ 已记录佣金下发 {:+.2f} USDT\n\n".format(val) + format_summary(cid,uid))
+    bot.reply_to(msg, "✅ 今日记录已清零！")
 
-# —— 显示账单 —— #
+# —— 命令：显示账单 —— #
 @bot.message_handler(commands=['显示账单'])
 def cmd_summary(msg):
-    bot.reply_to(msg, format_summary(msg.chat.id,msg.from_user.id))
+    bot.reply_to(msg, format_summary(msg.chat.id, msg.from_user.id))
 
-# —— 客服帮助 & 定制 —— #
+# —— 命令：客服帮助 & 定制 —— #
 @bot.message_handler(commands=['客服帮助'])
 def cmd_cs(msg):
     bot.reply_to(msg, "联系客服：<客服链接>")
 
 @bot.message_handler(commands=['定制机器人'])
 def cmd_custom(msg):
-    bot.reply_to(msg, "定制请见：<定制链接>")
+    bot.reply_to(msg, "定制请访问：<定制链接>")
 
-if __name__=='__main__':
+# —— 入账 —— #
+@bot.message_handler(func=lambda m: re.match(r'^[\+入笔]*\d+(\.\d+)?$', m.text or ''))
+def handle_deposit(msg):
+    cid, uid = msg.chat.id, msg.from_user.id
+    s = fetch_settings(cid, uid)
+    if not s:
+        return bot.reply_to(msg, "❌ 请先 /trade 设置交易参数")
+    amt = float(re.findall(r'[\+入笔]*([0-9]+(?:\.[0-9]+)?)', msg.text)[0])
+    cursor.execute(
+        "INSERT INTO transactions(chat_id,user_id,amount,rate,fee_rate,commission_rate)"
+        "VALUES(%s,%s,%s,%s,%s,%s)",
+        (cid, uid, amt, s['rate'], s['fee_rate'], s['commission_rate'])
+    )
+    conn.commit()
+    bot.reply_to(msg, f"✅ 已入款 +{amt:.1f} (RMB)\n\n" + format_summary(cid, uid))
+
+# —— 删除最近一笔 —— #
+@bot.message_handler(func=lambda m: re.match(r'^(删除|撤销入款)\d+(\.\d+)?$', m.text or ''))
+def handle_delete(msg):
+    cid, uid = msg.chat.id, msg.from_user.id
+    rows = fetch_transactions(cid, uid)
+    if not rows:
+        return bot.reply_to(msg, "❌ 无可删除的入账记录")
+    row = rows[-1]
+    cursor.execute("UPDATE transactions SET status='deleted' WHERE id=%s", (row['id'],))
+    conn.commit()
+    bot.reply_to(msg, f"✅ 订单{row['id']:03d} 已删除 -{row['amount']:.1f} (RMB)\n\n" + format_summary(cid, uid))
+
+# —— 下发 —— #
+@bot.message_handler(func=lambda m: re.match(r'^下发-?\d+(\.\d+)?$', m.text or ''))
+def handle_issuance(msg):
+    cid, uid = msg.chat.id, msg.from_user.id
+    val = float(msg.text.replace('下发', ''))
+    cursor.execute(
+        "INSERT INTO issuances(chat_id,user_id,amount,type) VALUES(%s,%s,%s,'fund')",
+        (cid, uid, val)
+    )
+    conn.commit()
+    bot.reply_to(msg, f"✅ 已记录下发 {val:+.2f} USDT\n\n" + format_summary(cid, uid))
+
+# —— 佣金下发 —— #
+@bot.message_handler(func=lambda m: re.match(r'^佣金下发-?\d+(\.\d+)?$', m.text or ''))
+def handle_comm_issuance(msg):
+    cid, uid = msg.chat.id, msg.from_user.id
+    val = float(msg.text.replace('佣金下发', ''))
+    cursor.execute(
+        "INSERT INTO issuances(chat_id,user_id,amount,type) VALUES(%s,%s,%s,'commission')",
+        (cid, uid, val)
+    )
+    conn.commit()
+    bot.reply_to(msg, f"✅ 已记录佣金下发 {val:+.2f} USDT\n\n" + format_summary(cid, uid))
+
+if __name__ == '__main__':
     bot.remove_webhook()
     bot.infinity_polling(skip_pending=True)
