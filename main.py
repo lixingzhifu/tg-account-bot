@@ -13,8 +13,8 @@ bot = TeleBot(TOKEN)
 conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 cursor = conn.cursor()
 
+# —— 初始化建表 —— #
 def init_db():
-    # 设置表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS settings (
       chat_id BIGINT, user_id BIGINT,
@@ -37,13 +37,14 @@ def init_db():
       id SERIAL PRIMARY KEY,
       chat_id BIGINT, user_id BIGINT,
       amount DOUBLE PRECISION, date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      type TEXT  -- 'fund' or 'commission'
+      type TEXT
     );
     """)
     conn.commit()
 
 init_db()
 
+# —— 工具函数 —— #
 def fetch_settings(cid, uid):
     cursor.execute("SELECT * FROM settings WHERE chat_id=%s AND user_id=%s", (cid, uid))
     return cursor.fetchone()
@@ -60,130 +61,79 @@ def fetch_issuances(cid, uid):
     )
     return cursor.fetchall()
 
-# —— /start —— #
-@bot.message_handler(commands=['start'])
-def cmd_start(msg):
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add('/trade', '/指令大全', '/重置', '/显示账单', '/客服帮助', '/定制机器人')
-    bot.reply_to(msg,
-        "欢迎使用 LX 记账机器人 ✅\n请选择菜单：",
-        reply_markup=kb
-    )
-
-# —— 指令大全 —— #
-@bot.message_handler(commands=['指令大全'])
-def cmd_help(msg):
-    text = (
-        "📜 指令大全：\n"
-        "/start - 启动机器人\n"
-        "/trade - 设置交易参数\n"
-        "+1000 / 入1000 / 入笔1000 - 记入款\n"
-        "删除1000 / 撤销入款 - 删除最近一笔入款\n"
-        "删除编号001 - 删除指定编号\n"
-        "下发1000 / -1000 - 记下发\n"
-        "佣金下发50 - 记佣金下发\n"
-        "/重置 - 清空今日数据\n"
-        "/显示账单 - 查看今日汇总\n"
-        "/客服帮助 - 联系客服\n"
-        "/定制机器人 - 获取定制链接"
-    )
-    bot.reply_to(msg, text)
-
-# —— /trade —— #
-@bot.message_handler(commands=['trade'])
-def cmd_trade(msg):
-    bot.reply_to(msg,
-        "设置交易指令\n"
-        "设置汇率：0\n"
-        "设置费率：0\n"
-        "中介佣金：0.0"
-    )
-
-@bot.message_handler(func=lambda m: m.text and m.text.startswith('设置交易指令'))
-def handle_trade(msg):
-    t = msg.text
-    try:
-        rate = float(re.search(r'设置汇率[:：]\s*([\d.]+)', t).group(1))
-        fee  = float(re.search(r'设置费率[:：]\s*([\d.]+)', t).group(1))
-        comm = float(re.search(r'中介佣金[:：]\s*([\d.]+)', t).group(1))
-    except:
-        return bot.reply_to(msg, "❌ 格式错误，请按指示填写。")
-    cid, uid = msg.chat.id, msg.from_user.id
-    cursor.execute(
-        "INSERT INTO settings(chat_id,user_id,rate,fee_rate,commission_rate)"
-        "VALUES(%s,%s,%s,%s,%s) "
-        "ON CONFLICT(chat_id,user_id) DO UPDATE SET rate=EXCLUDED.rate,"
-        "fee_rate=EXCLUDED.fee_rate,commission_rate=EXCLUDED.commission_rate",
-        (cid, uid, rate, fee, comm)
-    )
-    conn.commit()
-    bot.reply_to(msg,
-        f"✅ 设置成功\n汇率：{rate:.1f}\n费率：{fee:.1f}%\n佣金率：{comm:.1f}%"
-    )
-
-# —— 重置 /calculate_reset /reset —— #
-@bot.message_handler(commands=['重置','calculate_reset','reset'])
-def cmd_reset(msg):
-    cid, uid = msg.chat.id, msg.from_user.id
-    cursor.execute("DELETE FROM transactions WHERE chat_id=%s AND user_id=%s", (cid, uid))
-    cursor.execute("DELETE FROM issuances   WHERE chat_id=%s AND user_id=%s", (cid, uid))
-    conn.commit()
-    bot.reply_to(msg, "✅ 今日记录已清零！")
-
-# —— 汇总 —— #
+# —— 定义格式化汇总 —— #
 def format_summary(cid, uid):
     tz = pytz.timezone('Asia/Kuala_Lumpur')
     today = datetime.now(tz).date()
+
     trans = fetch_transactions(cid, uid)
     issu  = fetch_issuances(cid, uid)
-    # 今日入笔
-    in_lines, del_lines = [], []
+
+    pending_lines = []
+    deleted_lines = []
     for r in trans:
-        d = r['date'].astimezone(tz)
-        if d.date()!=today: continue
+        dt = r['date']
+        if dt is None:
+            continue
+        # 处理时区：若无 tzinfo，当成 UTC
+        if dt.tzinfo is None:
+            dt = pytz.utc.localize(dt)
+        local_dt = dt.astimezone(tz)
+        if local_dt.date() != today:
+            continue
         sign = '-' if r['status']=='deleted' else '+'
         amt  = r['amount']
-        ts   = d.strftime('%H:%M:%S')
+        ts   = local_dt.strftime('%H:%M:%S')
         netf = 1 - r['fee_rate']/100
         usd  = round(amt*netf/r['rate'],2)
         line = f"{r['id']:03d}. {ts} {sign}{abs(amt)} * {netf:.2f} / {r['rate']:.1f} = {usd:.2f}"
-        if r['status']=='pending': in_lines.append(line)
-        else:                          del_lines.append(line)
-    # 今日下发
+        if r['status']=='pending':
+            pending_lines.append(line)
+        else:
+            deleted_lines.append(line)
+
     out_lines = []
     for r in issu:
-        d = r['date'].astimezone(tz)
-        if d.date()!=today: continue
-        sign = '-' if r['amount']<0 else ''
-        ts   = d.strftime('%H:%M:%S')
-        usd  = abs(r['amount'])
-        out_lines.append(f"{ts} {sign}{usd:.2f}")
-    # 汇总数值
-    total_in  = sum(r['amount'] for r in trans if r['status']=='pending')
-    total_del = sum(r['amount'] for r in trans if r['status']=='deleted')
-    rate = fetch_settings(cid,uid)['rate']
-    fee  = fetch_settings(cid,uid)['fee_rate']
-    commr= fetch_settings(cid,uid)['commission_rate']
+        dt = r['date']
+        if dt is None:
+            continue
+        if dt.tzinfo is None:
+            dt = pytz.utc.localize(dt)
+        local_dt = dt.astimezone(tz)
+        if local_dt.date() != today:
+            continue
+        sign = '' if r['amount']>=0 else '-'
+        ts   = local_dt.strftime('%H:%M:%S')
+        out_amt = abs(r['amount'])
+        out_lines.append(f"{ts} {sign}{out_amt:.2f}")
+
+    # 汇总计算
+    total_in = sum(r['amount'] for r in trans if r['status']=='pending')
+    comm_due = sum(r['amount']*r['commission_rate']/100 for r in trans if r['status']=='pending')
     total_pending = sum(r['amount']*(1-r['fee_rate']/100) for r in trans if r['status']=='pending')
-    issued_amount = sum(r['amount'] for r in issu if r['type']=='fund')
-    comm_due = sum(r['amount']*commr/100 for r in trans if r['status']=='pending')
-    comm_issued = sum(r['amount'] for r in issu if r['type']=='commission')
-    unissued = total_pending - issued_amount
-    # build text
+    issued_amt = sum(r['amount'] for r in issu if r['type']=='fund')
+    comm_issued= sum(r['amount'] for r in issu if r['type']=='commission')
+    unissued = total_pending - issued_amt
+
+    s = fetch_settings(cid, uid) or {'rate':0,'fee_rate':0,'commission_rate':0}
+    rate = s['rate']
+    fee  = s['fee_rate']
+    comm = s['commission_rate']
+
     lines = []
-    lines.append(f"今日入笔（{len(in_lines)}笔）")
-    lines += in_lines + del_lines
+    lines.append(f"今日入笔（{len(pending_lines)}笔）")
+    lines += pending_lines + deleted_lines
     lines.append("")
     lines.append(f"今日下发（{len(out_lines)}笔）")
     lines += out_lines
     lines.append("")
-    lines.append(f"已入款（{len(in_lines)}笔）：{total_in:.1f} (RMB)")
+    lines.append(f"已入款（{len(pending_lines)}笔）：{total_in:.1f} (RMB)")
     lines.append(f"汇率：{rate:.1f}")
     lines.append(f"费率：{fee:.1f}%")
     lines.append(f"佣金：{comm_due:.1f} | {comm_due/rate:.2f} USDT")
     lines.append("")
     lines.append(f"应下发：{total_pending:.2f} | {total_pending/rate:.2f} (USDT)")
-    lines.append(f"已下发：{issued_amount:.2f} | {issued_amount/rate:.2f} (USDT)")
+    lines.append(f"已下发：{issued_amt:.2f} | {issued_amt/rate:.2f} (USDT)")
     lines.append(f"未下发：{unissued:.2f} | {unissued/rate:.2f} (USDT)")
     lines.append("")
     lines.append(f"佣金应下发：{comm_due:.2f} | {comm_due/rate:.2f} (USDT)")
