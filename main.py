@@ -183,6 +183,7 @@ def handle_deposit(msg):
         # 7) —— 筛“今日入笔” —— #
         tz         = pytz.timezone('Asia/Kuala_Lumpur')
         today_date = datetime.now(tz).date()
+
         cursor.execute("""
             SELECT id, date, amount, fee_rate, rate, name
             FROM transactions
@@ -193,7 +194,9 @@ def handle_deposit(msg):
         daily_lines = []
         for r in all_rows:
             rd = r['date']
-            if rd.tzinfo is None:              # 如果从 DB 读出来没有时区
+            if rd is None:
+                continue                  # 跳过没有日期的记录
+            if rd.tzinfo is None:
                 rd = rd.replace(tzinfo=pytz.utc)
             local_dt = rd.astimezone(tz)
             if local_dt.date() != today_date:
@@ -209,18 +212,12 @@ def handle_deposit(msg):
         daily_cnt  = len(daily_lines)
         issued_cnt = 0  # 今天暂不支持“已下发”明细
 
-        # 8) —— 构造最终回复 —— #
-        res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
-        res += f"{tid}. {t_str} {amount} * {1-fee_rate/100} / {rate} = {usdt_val}  {msg.from_user.username}\n"
-        if comm_rate > 0:
-            res += f"{tid}. {t_str} {amount} * {comm_rate/100} = {comm_rmb} 【佣金】\n\n"
-
-        # 添加「今日入笔」 & 「今日下发」
+        # 8) —— 在这里拼接“今日入笔” & “今日下发”到最终回复里 —— #
         res += f"今日入笔（{daily_cnt}笔）\n"
         if daily_cnt:
             res += "\n".join(daily_lines) + "\n"
         res += f"\n今日下发（{issued_cnt}笔）\n\n"
-
+       
         # 然后再加下方「汇总 & 费率 & 应/已/未下发」
         res += (
             f"已入款（{cnt}笔）：{total_amt} ({currency})\n"
