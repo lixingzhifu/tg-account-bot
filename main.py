@@ -179,8 +179,7 @@ def handle_deposit(msg):
         ti_usdt = round(total_issued   / rate, 2)
         tu_usdt = round(total_unissued / rate, 2)
 
-        # 7) —— “今日入笔” 用 Python 过滤 —— #
-        # 取出所有，再挑今天的
+               # 7) —— “今日入笔” 用 Python 过滤 —— #
         cursor.execute("""
             SELECT id, date, amount, fee_rate, rate, name
             FROM transactions
@@ -192,10 +191,17 @@ def handle_deposit(msg):
         daily_lines = []
         today_date = now_local.date()
         for r in all_rows:
-            # 假设 r['date'] 是 Python datetime
-            if r['date'].astimezone(tz).date() != today_date:
+            rd = r['date']
+            if not rd:
                 continue
-            ts = r['date'].astimezone(tz).strftime('%H:%M:%S')
+            # 如果 datetime 没有 tzinfo，就先假设它是 UTC
+            if rd.tzinfo is None:
+                rd = rd.replace(tzinfo=pytz.utc)
+            local_dt = rd.astimezone(tz)
+            if local_dt.date() != today_date:
+                continue
+
+            ts = local_dt.strftime('%H:%M:%S')
             amt = r['amount']
             net = amt * (1 - r['fee_rate']/100)
             u   = round(net / r['rate'], 2)
