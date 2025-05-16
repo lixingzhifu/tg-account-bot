@@ -197,22 +197,28 @@ def handle_deposit(msg):
 
         daily_lines = []
         for r in rows:
-            rd = r['date']
-            # 假设 DB 存的是 UTC，无 tzinfo 的先当 UTC
-            if rd.tzinfo is None:
-                rd = rd.replace(tzinfo=pytz.utc)
-            local_dt = rd.astimezone(tz)
-            if local_dt.date() != today_date:
-                continue
-            ts = local_dt.strftime('%H:%M:%S')
-            amt = r['amount']
-            net = amt * (1 - r['fee_rate']/100)
-            usd = round(net / r['rate'], 2)
-            sign = '+' if amt > 0 else '-'
-            daily_lines.append(
-                f"{r['id']:03d}. {ts} {sign}{abs(amt)} * "
-                f"{1 - r['fee_rate']/100} / {r['rate']} = {usd}  {r['name']}"
-            )
+    rd = r['date']
+    # 跳过没有 date 的记录
+    if rd is None:
+        continue
+
+    # 把无时区的 timestamp 当成 UTC 处理
+    if rd.tzinfo is None:
+        rd = rd.replace(tzinfo=pytz.utc)
+
+    local_dt = rd.astimezone(tz)
+    if local_dt.date() != today_date:
+        continue
+
+    ts   = local_dt.strftime('%H:%M:%S')
+    amt  = r['amount']
+    net  = amt * (1 - r['fee_rate']/100)
+    usd  = round(net / r['rate'], 2)
+    sign = '+' if amt > 0 else '-'
+    daily_lines.append(
+        f"{r['id']:03d}. {ts} {sign}{abs(amt)} * "
+        f"{1 - r['fee_rate']/100} / {r['rate']} = {usd}  {r['name']}"
+    )
         daily_cnt = len(daily_lines)
         issued_cnt = 0  # 今天暂不支持“已下发”明细
 
