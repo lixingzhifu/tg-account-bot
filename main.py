@@ -179,38 +179,41 @@ def handle_deposit(msg):
         ti_usdt = round(total_issued   / rate, 2)
         tu_usdt = round(total_unissued / rate, 2)
 
-               # 7) —— “今日入笔” 用 Python 过滤 —— #
-        cursor.execute("""
-            SELECT id, date, amount, fee_rate, rate, name
-            FROM transactions
-            WHERE chat_id=%s AND user_id=%s
-            ORDER BY date
-        """, (chat_id, user_id))
-        all_rows = cursor.fetchall()
+          # … insert / commit 完成之后 …
 
-        daily_lines = []
-        today_date = now_local.date()
-        for r in all_rows:
-            rd = r['date']
-            if not rd:
-                continue
-            # 如果 datetime 没有 tzinfo，就先假设它是 UTC
-            if rd.tzinfo is None:
-                rd = rd.replace(tzinfo=pytz.utc)
-            local_dt = rd.astimezone(tz)
-            if local_dt.date() != today_date:
-                continue
+    # —— 先算本地今天日期 —— #
+    tz = pytz.timezone('Asia/Kuala_Lumpur')
+    now_local  = datetime.now(tz)
+    today_date = now_local.date()
 
-            ts = local_dt.strftime('%H:%M:%S')
-            amt = r['amount']
-            net = amt * (1 - r['fee_rate']/100)
-            u   = round(net / r['rate'], 2)
-            sign = '+' if amt > 0 else '-'
-            daily_lines.append(
-                f"{r['id']:03d}. {ts} {sign}{abs(amt)} * {1 - r['fee_rate']/100} / {r['rate']} = {u}  {r['name']}"
-            )
-        daily_cnt = len(daily_lines)
-        issued_cnt = 0  # 今日下发明细暂不列
+    # 7) —— 筛“今日入笔” —— #
+    cursor.execute("""
+      SELECT id, date, amount, fee_rate, rate, name
+      FROM transactions
+      WHERE chat_id=%s AND user_id=%s
+      ORDER BY date
+    """, (chat_id, user_id))
+    all_rows = cursor.fetchall()
+    daily_lines = []
+    for r in all_rows:
+        rd = r['date']
+        if not rd:
+            continue
+        if rd.tzinfo is None:
+            rd = rd.replace(tzinfo=pytz.utc)
+        local_dt = rd.astimezone(tz)
+        if local_dt.date() != today_date:
+            continue
+        ts   = local_dt.strftime('%H:%M:%S')
+        amt  = r['amount']
+        net  = amt * (1 - r['fee_rate']/100)
+        usdt = round(net / r['rate'], 2)
+        sign = '+' if amt>0 else '-'
+        daily_lines.append(
+          f"{r['id']:03d}. {ts} {sign}{abs(amt)} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}"
+        )
+    daily_cnt  = len(daily_lines)
+    issued_cnt = 0
 
         # 8) —— 构造回复文本 —— #
         res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
