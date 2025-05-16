@@ -185,37 +185,43 @@ def handle_deposit(msg):
         tu_usdt = round(total_unissued / rate, 2)
         total_comm_usdt = round(total_comm_rmb / rate, 2)
 
-        # 7) 筛选「今日入笔」列表
+       # —— 入账（记录交易） —— #
+@bot.message_handler(…)
+def handle_deposit(msg):
+    …
+    try:
+        …
+        # 7) —— 筛选“今日入笔”列表（原来写在 SQL，这里全换成 Python 过滤） 
         today_date = now_loc.date()
-        # 用 AT TIME ZONE 把 UTC 存的 timestamp 转到当地
         cursor.execute("""
-            SELECT
-              id,
-              (date AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuala_Lumpur') AS local_dt,
-              amount, fee_rate, rate, name
+            SELECT id, date, amount, fee_rate, rate, name
             FROM transactions
             WHERE chat_id=%s AND user_id=%s
-              AND (date AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuala_Lumpur')::date = %s
             ORDER BY date
-        """, (chat_id, user_id, today_date))
+        """, (chat_id, user_id))
         rows = cursor.fetchall()
 
         daily_lines = []
-        for rec in rows:
-            ld  = rec['local_dt']
-            ts  = ld.strftime('%H:%M:%S')
-            amt = rec['amount']
-            net = amt * (1 - rec['fee_rate']/100)
-            us  = round(net / rec['rate'], 2)
+        for r in rows:
+            rd = r['date']
+            # 把无时区的 timestamp 先当成 UTC
+            rd = rd.replace(tzinfo=pytz.utc)
+            local_dt = rd.astimezone(pytz.timezone('Asia/Kuala_Lumpur'))
+            if local_dt.date() != today_date:
+                continue
+            ts   = local_dt.strftime('%H:%M:%S')
+            amt  = r['amount']
+            net  = amt * (1 - r['fee_rate']/100)
+            usdt = round(net / r['rate'], 2)
             sign = '+' if amt>0 else '-'
             daily_lines.append(
-                f"{rec['id']:03d}. {ts} {sign}{abs(amt)} * {1 - rec['fee_rate']/100} "
-                f"/ {rec['rate']} = {us}  {rec['name']}"
+                f"{r['id']:03d}. {ts} {sign}{abs(amt)} * "
+                f"{1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}"
             )
         daily_cnt = len(daily_lines)
-        issued_cnt = 0  # 暂不支持今日“已下发”明细
+        issued_cnt = 0  # 今天暂不支持“已下发”明细
 
-        # 8) 拼最终回复
+        # 8) —— 构造最终回复 —— #
         res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
         res += f"{tid}. {t_str} {amount} * {1-fee_rate/100} / {rate} = {usdt_val}  {msg.from_user.username}\n"
         if comm_rate>0:
