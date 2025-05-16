@@ -179,8 +179,6 @@ def handle_deposit(msg):
         ti_usdt = round(total_issued   / rate, 2)
         tu_usdt = round(total_unissued / rate, 2)
 
-    # … 上面已经完成 insert/汇总 total_amt/total_pending 等 ……
-
     # 7) —— 筛“今日入笔” —— #
     tz = pytz.timezone('Asia/Kuala_Lumpur')
     now_local  = datetime.now(tz)
