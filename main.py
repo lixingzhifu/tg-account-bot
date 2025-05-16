@@ -186,47 +186,49 @@ def handle_deposit(msg):
         tu_usdt          = round(total_unissued  / rate, 2)
         total_comm_usdt  = round(total_comm_rmb  / rate, 2)
 
-        # 7) —— 筛“今日入笔” —— #
-        # 先算出马来西亚时区的“今天”日期
-        tz = pytz.timezone('Asia/Kuala_Lumpur')
-        now_local = datetime.now(tz)
-        today_date = now_local.date()
-
-        # 从 transactions 里拉全部，当地用 Python 过滤“今天”数据
-        cursor.execute("""
-            SELECT id, date, amount, fee_rate, rate, name
-            FROM transactions
-            WHERE chat_id=%s AND user_id=%s
-            ORDER BY date
-        """, (chat_id, user_id))
-        all_rows = cursor.fetchall()
-
-        daily_lines = []
-        for r in all_rows:
-            rd = r['date']
-            if rd is None:
-                continue
-            # 如果 timestamp 是无时区的，先当作 UTC
-            if rd.tzinfo is None:
-                rd = rd.replace(tzinfo=pytz.utc)
-            # 转成本地
-            local_dt = rd.astimezone(tz)
-            # 过滤出“今天”的
-            if local_dt.date() != today_date:
-                continue
-
-            ts   = local_dt.strftime('%H:%M:%S')
-            amt  = r['amount']
-            net  = amt * (1 - r['fee_rate']/100)
-            usdt = round(net / r['rate'], 2)
-            sign = '+' if amt > 0 else '-'
-            daily_lines.append(
-                f"{r['id']:03d}. {ts} {sign}{abs(amt)} * "
-                f"{1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}"
-            )
-
-        daily_cnt  = len(daily_lines)
-        issued_cnt = 0  # 今日暂不支持“已下发”明细
+-        # 7) —— 筛“今日入笔” —— #
+-        …（很多行 Python 里再转时区、再过滤）…
+-        daily_cnt  = len(daily_lines)
+-        issued_cnt = 0  # 今日不支持“已下发”明细
++        # 7) —— 筛“今日入笔” （用 SQL 时间范围过滤） —— #
++        tz = pytz.timezone('Asia/Kuala_Lumpur')
++        today = datetime.now(tz).date()
++        # 本地“今天”0:00→明天0:00
++        start_local = tz.localize(datetime.combine(today, datetime.min.time()))
++        end_local   = start_local + timedelta(days=1)
++        # 转成 UTC 时间戳，用来给 SQL 过滤
++        start_utc = start_local.astimezone(pytz.utc)
++        end_utc   = end_local.astimezone(pytz.utc)
++
++        cursor.execute("""
++            SELECT id, date, amount, fee_rate, rate, name
++            FROM transactions
++            WHERE chat_id=%s AND user_id=%s
++              AND date >= %s AND date < %s
++            ORDER BY date
++        """, (chat_id, user_id, start_utc, end_utc))
++        today_rows = cursor.fetchall()
++
++        daily_lines = []
++        for r in today_rows:
++            # 直接用数据库读下来的 timestamp 转本地显示
++            rd = r['date']
++            # 如果是无时区，就先当 UTC
++            if rd.tzinfo is None:
++                rd = rd.replace(tzinfo=pytz.utc)
++            local_dt = rd.astimezone(tz)
++            ts = local_dt.strftime('%H:%M:%S')
++            amt = r['amount']
++            net = amt * (1 - r['fee_rate']/100)
++            usd = round(net / r['rate'], 2)
++            sign = '+' if amt > 0 else '-'
++            daily_lines.append(
++                f"{r['id']:03d}. {ts} {sign}{abs(amt)} * "
++                f"{1 - r['fee_rate']/100} / {r['rate']} = {usd}  {r['name']}"
++            )
++
++        daily_cnt  = len(daily_lines)
++        issued_cnt = 0  # 今天暂不展示“已下发”明细
 
         # 8) 构造并发送回复
         res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
