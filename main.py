@@ -140,10 +140,10 @@ def handle_deposit(msg):
         comm_rmb  = round(amount * (comm_rate/100), 2)
         comm_usdt = round(comm_rmb / rate, 2)
 
-        # 4) 时间编号
+        # 4) 时间与编号
         tz = pytz.timezone('Asia/Kuala_Lumpur')
         now_local = datetime.now(tz)
-        t_str = now_local.strftime('%H:%M:%S')
+        t_str     = now_local.strftime('%H:%M:%S')
         cursor.execute(
             "SELECT COUNT(*) AS cnt FROM transactions WHERE chat_id=%s AND user_id=%s",
             (chat_id, user_id)
@@ -151,12 +151,12 @@ def handle_deposit(msg):
         cnt = cursor.fetchone()['cnt'] + 1
         tid = str(cnt).zfill(3)
 
-        # 5) 插入交易
+        # 5) 插入交易记录
         cursor.execute("""
             INSERT INTO transactions
               (chat_id,user_id,name,amount,rate,fee_rate,commission_rate,
                currency,message_id,deducted_amount)
-            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (
             chat_id, user_id, msg.from_user.username,
             amount, rate, fee_rate, comm_rate,
@@ -164,15 +164,16 @@ def handle_deposit(msg):
         ))
         conn.commit()
 
-               # 6) —— 汇总“总入款” & “应下发” —— #
+        # 6) 汇总「总入款」和「应下发」
         cursor.execute("""
-            SELECT SUM(amount) AS sa, SUM(deducted_amount) AS sp
+            SELECT SUM(amount)          AS total_amt,
+                   SUM(deducted_amount) AS total_pending
             FROM transactions
             WHERE chat_id=%s AND user_id=%s
         """, (chat_id, user_id))
         row = cursor.fetchone()
-        total_amt     = float(row['sa'] or 0)
-        total_pending = float(row['sp'] or 0)
+        total_amt     = float(row['total_amt']    or 0)
+        total_pending = float(row['total_pending'] or 0)
         total_issued  = 0.0
         total_unissued= total_pending
 
@@ -180,27 +181,26 @@ def handle_deposit(msg):
         ti_usdt = round(total_issued   / rate, 2)
         tu_usdt = round(total_unissued / rate, 2)
 
-        # 7) —— 筛“今日入笔” —— #
-        tz         = pytz.timezone('Asia/Kuala_Lumpur')
-        today_date = datetime.now(tz).date()
-
+        # 7) —— 筛“今日入笔” ——
+        today_date = now_local.date()
         cursor.execute("""
             SELECT id, date, amount, fee_rate, rate, name
             FROM transactions
             WHERE chat_id=%s AND user_id=%s
+              AND date >= %s AND date < %s
             ORDER BY date
-        """, (chat_id, user_id))
+        """, (
+            chat_id, user_id,
+            tz.localize(datetime.combine(today_date, datetime.min.time())).astimezone(pytz.utc),
+            tz.localize(datetime.combine(today_date + timedelta(days=1), datetime.min.time())).astimezone(pytz.utc)
+        ))
         all_rows    = cursor.fetchall()
         daily_lines = []
         for r in all_rows:
             rd = r['date']
-            if rd is None:
-                continue                  # 跳过没有日期的记录
             if rd.tzinfo is None:
                 rd = rd.replace(tzinfo=pytz.utc)
             local_dt = rd.astimezone(tz)
-            if local_dt.date() != today_date:
-                continue
             ts   = local_dt.strftime('%H:%M:%S')
             amt  = r['amount']
             net  = amt * (1 - r['fee_rate']/100)
@@ -210,15 +210,21 @@ def handle_deposit(msg):
                 f"{r['id']:03d}. {ts} {sign}{abs(amt)} * {1 - r['fee_rate']/100} / {r['rate']} = {usdt}  {r['name']}"
             )
         daily_cnt  = len(daily_lines)
-        issued_cnt = 0  # 今天暂不支持“已下发”明细
+        issued_cnt = 0  # 今日暂不支持「已下发」明细
 
-        # 8) —— 在这里拼接“今日入笔” & “今日下发”到最终回复里 —— #
+        # 8) —— 构造回复文本 —— #
+        res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
+        res += f"{tid}. {t_str} {amount} * {1-fee_rate/100} / {rate} = {usdt_val}  {msg.from_user.username}\n"
+        if comm_rate > 0:
+            res += f"{tid}. {t_str} {amount} * {comm_rate/100} = {comm_rmb} 【佣金】\n\n"
+
+        # —— 加入「今日入笔」 & 「今日下发」 —— #
         res += f"今日入笔（{daily_cnt}笔）\n"
         if daily_cnt:
             res += "\n".join(daily_lines) + "\n"
         res += f"\n今日下发（{issued_cnt}笔）\n\n"
-       
-        # 然后再加下方「汇总 & 费率 & 应/已/未下发」
+
+        # —— 后面继续你的「已入款/汇率/费率/应下发/已下发/未下发/佣金」部分 —— #
         res += (
             f"已入款（{cnt}笔）：{total_amt} ({currency})\n"
             f"汇率：{rate}\n费率：{fee_rate}%\n"
