@@ -5,11 +5,11 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from telebot import TeleBot, types
 import pytz
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # —— 2 环境变量 —— #
-TOKEN = os.getenv("TOKEN")  # 在环境变量中配置你的 Telegram Bot Token
-DATABASE_URL = os.getenv("DATABASE_URL")  # PostgreSQL 数据库连接 URL
+TOKEN = os.getenv("TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 CUSTOMER_HELP_URL = "https://your.support.link"
 CUSTOMER_CUSTOM_URL = "https://your.custom.link"
 
@@ -42,7 +42,6 @@ CREATE TABLE IF NOT EXISTS transactions (
     commission_rmb DOUBLE PRECISION NOT NULL,
     commission_usdt DOUBLE PRECISION NOT NULL,
     deducted_amount DOUBLE PRECISION NOT NULL,
-    deducted_usdt DOUBLE PRECISION NOT NULL,
     rate DOUBLE PRECISION NOT NULL,
     fee_rate DOUBLE PRECISION NOT NULL,
     commission_rate DOUBLE PRECISION NOT NULL,
@@ -52,14 +51,14 @@ CREATE TABLE IF NOT EXISTS transactions (
 """)
 conn.commit()
 
-# —— 5 辅助函数 —— #
+# —— 辅助：回滚 —— #
 def rollback():
     try:
         conn.rollback()
     except:
         pass
 
-# —— 6 /start —— #
+# —— 5 /start —— #
 @bot.message_handler(commands=['start'])
 def cmd_start(msg):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -71,7 +70,7 @@ def cmd_start(msg):
         reply_markup=kb
     )
 
-# —— 7 /commands —— #
+# —— 6 /commands —— #
 @bot.message_handler(commands=['commands'])
 def cmd_commands(msg):
     text = (
@@ -88,7 +87,7 @@ def cmd_commands(msg):
     )
     bot.reply_to(msg, text)
 
-# —— 8 /trade —— #
+# —— 7 /trade 设置 —— #
 @bot.message_handler(commands=['trade'])
 def cmd_trade(msg):
     bot.reply_to(msg,
@@ -102,12 +101,11 @@ def cmd_trade(msg):
 
 @bot.message_handler(func=lambda m: '设置交易指令' in (m.text or ''))
 def handle_trade_setup(msg):
-    text = msg.text
     try:
-        curr = re.search(r'设置货币[:：]\s*(\S+)', text).group(1)
-        rate = float(re.search(r'设置汇率[:：]\s*([0-9.]+)', text).group(1))
-        fee  = float(re.search(r'设置费率[:：]\s*([0-9.]+)', text).group(1))
-        comm = float(re.search(r'中介佣金[:：]\s*([0-9.]+)', text).group(1))
+        curr = re.search(r'设置货币[:：]\s*(\S+)', msg.text).group(1)
+        rate = float(re.search(r'设置汇率[:：]\s*([0-9.]+)', msg.text).group(1))
+        fee  = float(re.search(r'设置费率[:：]\s*([0-9.]+)', msg.text).group(1))
+        comm = float(re.search(r'中介佣金[:：]\s*([0-9.]+)', msg.text).group(1))
     except:
         return bot.reply_to(msg, "❌ 格式错误，请严格按指示填写。")
     cid, uid = msg.chat.id, msg.from_user.id
@@ -126,7 +124,7 @@ def handle_trade_setup(msg):
         rollback()
         bot.reply_to(msg, f"❌ 存储失败：{e}")
 
-# —— 9 /reset —— #
+# —— 8 /reset —— #
 @bot.message_handler(commands=['reset'])
 def cmd_reset(msg):
     cid, uid = msg.chat.id, msg.from_user.id
@@ -141,7 +139,7 @@ def cmd_reset(msg):
         rollback()
         bot.reply_to(msg, f"❌ 重置失败：{e}")
 
-# —— 10 /show —— #
+# —— 9 /show —— #
 @bot.message_handler(commands=['show'])
 def cmd_show(msg):
     cid, uid = msg.chat.id, msg.from_user.id
@@ -172,9 +170,9 @@ def cmd_show(msg):
             total_pending -= r['after_fee']
             total_comm -= r['commission_rmb']
         elif r['action']=='issue':
-            total_iss += r['deducted_amount']
+            total_iss += r['amount']
         elif r['action']=='delete_issue':
-            total_iss -= r['deducted_amount']
+            total_iss -= r['amount']
         if local.date()==today:
             ts = local.strftime('%H:%M:%S')
             if r['action'] in ('deposit','delete'):
@@ -183,8 +181,8 @@ def cmd_show(msg):
                 dep_lines.append(f"{r['id']:03d}. {ts} {sign}{abs(r['amount'])} * {1-r['fee_rate']/100} / {r['rate']} = {usd_val}  {r['name']}")
             else:
                 sign = '+' if r['action']=='issue' else '-'
-                usd_iss = round(r['deducted_amount']/r['rate'],2)
-                iss_lines.append(f"{ts} {sign}{r['deducted_amount']} | {sign}{usd_iss} (USDT)  {r['name']}")
+                usd_iss = round(r['amount']/r['rate'],2)
+                iss_lines.append(f"{ts} {sign}{r['amount']} | {sign}{usd_iss} (USDT)  {r['name']}")
     pending = total_pending - total_iss
     text = []
     text.append(f"日入笔（{len(dep_lines)}笔）")
@@ -201,7 +199,7 @@ def cmd_show(msg):
     ])
     bot.reply_to(msg, "\n".join(text))
 
-# —— 11 客服 & 定制 —— #
+# —— 10 客服 & 定制 —— #
 @bot.message_handler(commands=['help_customer'])
 def cmd_help(msg):
     bot.reply_to(msg, f"客服帮助：{CUSTOMER_HELP_URL}")
@@ -209,25 +207,44 @@ def cmd_help(msg):
 def cmd_custom(msg):
     bot.reply_to(msg, f"定制机器人：{CUSTOMER_CUSTOM_URL}")
 
-# —— 12 统一操作入口 —— #
-@bot.message_handler(func=lambda m: re.match(r'^(?:[\+入笔]?\d+(?:\.\d+)?|删除\d+(?:\.\d+)?|下发-?\d+(?:\.\d+)?|删除下发\d+(?:\.\d+)?)$', m.text or ''))
+# —— 11 统一操作入口 —— #
+@bot.message_handler(func=lambda m: re.match(r'^(?:[\+入笔]?\d+(?:\.\d+)?|删除\d+(?:\.\d+)?|撤销入款\d+(?:\.\d+)?|下发-?\d+(?:\.\d+)?|删除下发\d+(?:\.\d+)?)$', m.text or ''))
 def handle_action(msg):
     text = msg.text.strip()
-    m_dep  = re.match(r'^[\+入笔]?(\d+(?:\.\d+)?)$', text)
-    m_del  = re.match(r'^(?:删除|撤销入款|入款-)(\d+(?:\.\d+)?)$', text)
-    m_iss  = re.match(r'^下发(-?\d+(?:\.\d+)?)$', text)
-    m_idel = re.match(r'^删除下发(\d+(?:\.\d+)?)$', text)
     cid, uid = msg.chat.id, msg.from_user.id
+    # 检查设置
     cursor.execute("SELECT * FROM settings WHERE chat_id=%s AND user_id=%s", (cid, uid))
     s = cursor.fetchone()
     if not s:
         return bot.reply_to(msg, "❌ 请先 /trade 设置参数。")
     tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(tz)
-    if m_dep:
-        amt = float(m_dep.group(1)); action='deposit'
-    elif m_del:
-        amt = float(m_del.group(1)); action='delete'
-    elif m_iss:
-        amt = float(m_iss.group(1)); action='issue'
-    else:
+    # 匹配动作
+    if re.match(r'^[\+入笔]?(\d+(?:\.\d+)?)$', text): action='deposit';     amt=float(re.sub(r'[\+入笔]','', text))
+    elif re.match(r'^(?:删除|撤销入款)(\d+(?:\.\d+)?)$', text):   action='delete';      amt=float(re.sub(r'删除|撤销入款','', text))
+    elif re.match(r'^下发(-?\d+(?:\.\d+)?)$', text):            action='issue';       amt=float(text.replace('下发',''))
+    elif re.match(r'^删除下发(\d+(?:\.\d+)?)$', text):         action='delete_issue'; amt=float(text.replace('删除下发',''))
+    else: return
+    # 计算数值
+    fee_rate, comm_rate, rate = s['fee_rate'], s['commission_rate'], s['rate']
+    after_fee = amt * (1 - fee_rate/100)
+    comm_rmb  = abs(amt) * (comm_rate/100)
+    comm_usdt = round(comm_rmb / rate, 2)
+    deducted_amount = amt if action in ('issue','delete_issue') else after_fee
+    # 插入记录
+    try:
+        cursor.execute(
+            "INSERT INTO transactions(chat_id,user_id,name,action,amount,after_fee,commission_rmb,commission_usdt,deducted_amount,rate,fee_rate,commission_rate,currency)"
+            " VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (cid, uid, msg.from_user.username, action, amt, after_fee, comm_rmb, comm_usdt, deducted_amount, rate, fee_rate, comm_rate, s['currency'])
+        )
+        conn.commit()
+        bot.reply_to(msg, "✅ 操作成功！")
+    except Exception as e:
+        rollback()
+        bot.reply_to(msg, f"❌ 失败：{e}")
+
+# —— 12 启动 —— #
+if __name__ == '__main__':
+    bot.remove_webhook()
+    bot.infinity_polling(skip_pending=True)
