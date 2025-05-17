@@ -29,15 +29,14 @@ CREATE TABLE IF NOT EXISTS settings (
     commission_rate DOUBLE PRECISION NOT NULL,
     PRIMARY KEY(chat_id, user_id)
 );
-"""
-)
+""")
+
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS transactions (
     id SERIAL PRIMARY KEY,
     chat_id BIGINT NOT NULL,
     user_id BIGINT NOT NULL,
     name TEXT NOT NULL,
-    -- 新增 action 字段，用于记录操作类型：入笔、删除、下发、撤销下发
     action TEXT NOT NULL CHECK(action IN ('deposit','delete','issue','delete_issue')) DEFAULT 'deposit',
     amount DOUBLE PRECISION NOT NULL,
     after_fee DOUBLE PRECISION NOT NULL,
@@ -50,15 +49,14 @@ CREATE TABLE IF NOT EXISTS transactions (
     currency TEXT NOT NULL,
     date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-"""
-)
-# 如果表已存在但缺少 action 字段，则动态新增该列
-cursor.execute(""
-ALTER TABLE transactions 
-ADD COLUMN IF NOT EXISTS action TEXT NOT NULL 
+""")
+
+# 确保 action 列存在
+cursor.execute("""
+ALTER TABLE transactions
+ADD COLUMN IF NOT EXISTS action TEXT NOT NULL
 CHECK (action IN ('deposit','delete','issue','delete_issue')) DEFAULT 'deposit';
-"""
-)
+""")
 conn.commit()
 
 # —— 辅助：回滚 —— #
@@ -124,7 +122,7 @@ def handle_trade_setup(msg):
             "INSERT INTO settings(chat_id,user_id,currency,rate,fee_rate,commission_rate)"
             " VALUES(%s,%s,%s,%s,%s,%s)"
             " ON CONFLICT(chat_id,user_id) DO UPDATE SET"
-            " currency=EXCLUDED.currency, rate=EXCLUDED.rate,"  
+            " currency=EXCLUDED.currency, rate=EXCLUDED.rate,"
             " fee_rate=EXCLUDED.fee_rate, commission_rate=EXCLUDED.commission_rate",
             (cid, uid, curr, rate, fee, comm)
         )
@@ -222,26 +220,22 @@ def cmd_custom(msg):
 def handle_action(msg):
     text = msg.text.strip()
     cid, uid = msg.chat.id, msg.from_user.id
-    # 检查设置
     cursor.execute("SELECT * FROM settings WHERE chat_id=%s AND user_id=%s", (cid, uid))
     s = cursor.fetchone()
     if not s:
         return bot.reply_to(msg, "❌ 请先 /trade 设置参数。")
     tz = pytz.timezone('Asia/Kuala_Lumpur')
     now = datetime.now(tz)
-    # 匹配动作
     if re.match(r'^[\+入笔]?(\d+(?:\.\d+)?)$', text): action='deposit';     amt=float(re.sub(r'[\+入笔]','', text))
     elif re.match(r'^(?:删除|撤销入款)(\d+(?:\.\d+)?)$', text):   action='delete';      amt=float(re.sub(r'删除|撤销入款','', text))
     elif re.match(r'^下发(-?\d+(?:\.\d+)?)$', text):            action='issue';       amt=float(text.replace('下发',''))
     elif re.match(r'^删除下发(\d+(?:\.\d+)?)$', text):         action='delete_issue'; amt=float(text.replace('删除下发',''))
     else: return
-    # 计算数值
     fee_rate, comm_rate, rate = s['fee_rate'], s['commission_rate'], s['rate']
     after_fee = amt * (1 - fee_rate/100)
     comm_rmb  = abs(amt) * (comm_rate/100)
     comm_usdt = round(comm_rmb / rate, 2)
     deducted_amount = amt if action in ('issue','delete_issue') else after_fee
-    # 插入记录
     try:
         cursor.execute(
             "INSERT INTO transactions(chat_id,user_id,name,action,amount,after_fee,commission_rmb,commission_usdt,deducted_amount,rate,fee_rate,commission_rate,currency)"
