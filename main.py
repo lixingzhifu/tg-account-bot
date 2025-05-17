@@ -238,8 +238,13 @@ def handle_action(msg):
     deducted_amount = amt if action in ('issue','delete_issue') else after_fee
     try:
         cursor.execute(
-            "INSERT INTO transactions(chat_id,user_id,name,action,amount,after_fee,commission_rmb,commission_usdt,deducted_amount,rate,fee_rate,commission_rate,currency)"
-            " VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+           INSERT INTO transactions(
+    chat_id,user_id,name,action,
+    amount,**deducted_amount**,commission_rmb,commission_usdt,
+    deducted_amount,rate,fee_rate,commission_rate,currency
+)
+VALUES( ... , **deducted_amount**, ... )
+
             (cid, uid, msg.from_user.username, action, amt, after_fee, comm_rmb, comm_usdt, deducted_amount, rate, fee_rate, comm_rate, s['currency'])
         )
         conn.commit()
