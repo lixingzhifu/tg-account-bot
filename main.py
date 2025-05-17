@@ -199,7 +199,7 @@ def cmd_custom(msg):
     bot.reply_to(msg, f"定制机器人：{CUSTOMER_CUSTOM_URL}")
 
 # —— 入款/删除入款 —— #
-@bot.message_handler(func=lambda m: re.match(r'^(?:[\+入笔]?\d+(?:\.\d+)?|删除\d+(?:\.\d+)?|撤销入款\d+(?:\.\d+)?|入款-\d+(?:\.\d+)?)$', m.text or ''))
+@bot.message_handler(func=lambda m: re.match(r'^[\+\-\d].*$', m.text or ''))
 def handle_deposit(msg):
     text = msg.text.strip()
     m1 = re.match(r'^[\+入笔]?(\d+(?:\.\d+)?)$', text)
