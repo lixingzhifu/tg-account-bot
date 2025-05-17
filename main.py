@@ -29,14 +29,16 @@ CREATE TABLE IF NOT EXISTS settings (
     commission_rate DOUBLE PRECISION NOT NULL,
     PRIMARY KEY(chat_id, user_id)
 );
-""")
+"""
+)
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS transactions (
     id SERIAL PRIMARY KEY,
     chat_id BIGINT NOT NULL,
     user_id BIGINT NOT NULL,
     name TEXT NOT NULL,
-    action TEXT NOT NULL CHECK(action IN ('deposit','delete','issue','delete_issue')),
+    -- 新增 action 字段，用于记录操作类型：入笔、删除、下发、撤销下发
+    action TEXT NOT NULL CHECK(action IN ('deposit','delete','issue','delete_issue')) DEFAULT 'deposit',
     amount DOUBLE PRECISION NOT NULL,
     after_fee DOUBLE PRECISION NOT NULL,
     commission_rmb DOUBLE PRECISION NOT NULL,
@@ -48,7 +50,15 @@ CREATE TABLE IF NOT EXISTS transactions (
     currency TEXT NOT NULL,
     date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-""")
+"""
+)
+# 如果表已存在但缺少 action 字段，则动态新增该列
+cursor.execute(""
+ALTER TABLE transactions 
+ADD COLUMN IF NOT EXISTS action TEXT NOT NULL 
+CHECK (action IN ('deposit','delete','issue','delete_issue')) DEFAULT 'deposit';
+"""
+)
 conn.commit()
 
 # —— 辅助：回滚 —— #
