@@ -1,4 +1,3 @@
-```python
 # —— 1 导入与配置 —— #
 import os
 import re
@@ -164,7 +163,6 @@ def cmd_show(msg):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=pytz.utc)
         local = dt.astimezone(tz)
-        # 累计
         if r['action']=='deposit':
             total_dep += r['amount']
             total_pending += r['after_fee']
@@ -177,7 +175,6 @@ def cmd_show(msg):
             total_iss += r['deducted_amount']
         elif r['action']=='delete_issue':
             total_iss -= r['deducted_amount']
-        # 今日明细
         if local.date()==today:
             ts = local.strftime('%H:%M:%S')
             if r['action'] in ('deposit','delete'):
@@ -188,7 +185,6 @@ def cmd_show(msg):
                 sign = '+' if r['action']=='issue' else '-'
                 usd_iss = round(r['deducted_amount']/r['rate'],2)
                 iss_lines.append(f"{ts} {sign}{r['deducted_amount']} | {sign}{usd_iss} (USDT)  {r['name']}")
-    # 汇总
     pending = total_pending - total_iss
     text = []
     text.append(f"日入笔（{len(dep_lines)}笔）")
@@ -235,29 +231,3 @@ def handle_action(msg):
     elif m_iss:
         amt = float(m_iss.group(1)); action='issue'
     else:
-        amt = float(m_idel.group(1)); action='delete_issue'
-    after_fee = amt * (1 - s['fee_rate']/100)
-    comm_rmb  = round(amt*(s['commission_rate']/100),2)
-    comm_usdt = round(comm_rmb/s['rate'],2)
-    ded_amt   = after_fee if action in ('deposit','delete') else amt
-    ded_usdt  = round(ded_amt/s['rate'],2)
-    try:
-        cursor.execute(
-            """
-            INSERT INTO transactions(chat_id,user_id,name,action,amount,after_fee,commission_rmb,commission_usdt,deducted_amount,deducted_usdt,rate,fee_rate,commission_rate,currency)
-            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """,
-            (cid, uid, msg.from_user.username, action, amt, after_fee, comm_rmb, comm_usdt, ded_amt, ded_usdt, s['rate'], s['fee_rate'], s['commission_rate'], s['currency'])
-        )
-        conn.commit()
-    except Exception as e:
-        rollback()
-        return bot.reply_to(msg, f"❌ 存储失败：{e}")
-    desc = {'deposit':'入款','delete':'删除入款','issue':'下发','delete_issue':'删除下发'}[action]
-    bot.reply_to(msg, f"✅ 已{desc} {amt} ({s['currency']})")
-
-# —— 13 启动轮询 —— #
-if __name__ == '__main__':
-    bot.remove_webhook()  
-    bot.infinity_polling(skip_pending=True)
-```
