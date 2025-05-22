@@ -155,78 +155,41 @@ def handle_deposit(msg):
         ))
         conn.commit()
 
-········# —— 6 汇总“总入款” & “应下发” —— #
-········cursor.execute("""
-········SELECT SUM(amount)   AS sa,
-········       SUM(deducted_amount) AS sp
-········FROM transactions
-········WHERE chat_id=%s AND user_id=%s
-········""", (chat_id, user_id))
-········row            = cursor.fetchone()
-········total_amt      = float(row['sa'] or 0)
-········total_pending  = float(row['sp'] or 0)
-········total_issued   = 0.0
-········total_unissued = total_pending
+        # --- 汇总总入款 & 应下发 ---
+        cursor.execute("""
+        SELECT SUM(amount) AS sa, SUM(deducted_amount) AS sp
+        FROM transactions WHERE chat_id=%s AND user_id=%s
+        """, (chat_id,user_id))
+        row = cursor.fetchone()
+        total_amt      = float(row['sa'] or 0)
+        total_pending  = float(row['sp'] or 0)
+        total_issued   = 0.0
+        total_unissued = total_pending  # minus 0
 
-········tp_usdt = round(total_pending  / rate, 2)
-········ti_usdt = round(total_issued   / rate, 2)
-········tu_usdt = round(total_unissued / rate, 2)
+        # USDT 计算
+        tp_usdt = round(total_pending/rate,2)
+        ti_usdt = round(total_issued /rate,2)
+        tu_usdt = round(total_unissued/rate,2)
 
+        # --- 构造回复 ---
+        res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
+        res += f"{tid}. {t} {amount} * {1-fee_rate/100} / {rate} = {usdt_val}  {msg.from_user.username}\n"
+        if comm_rate>0:
+            res += f"{tid}. {t} {amount} * {comm_rate/100} = {comm_rmb} 【佣金】\n\n"
+        res += (
+            f"已入款（{cnt}笔）：{total_amt} ({currency})\n\n"
+            f"汇率：{rate}\n费率：{fee_rate}%\n"
+            f"佣金：{comm_rmb} ({currency}) | {comm_usdt} USDT\n\n"
+            f"应下发：{total_pending} ({currency}) | {tp_usdt} (USDT)\n"
+            f"已下发：{total_issued} ({currency}) | {ti_usdt} (USDT)\n"
+            f"未下发：{total_unissued} ({currency}) | {tu_usdt} (USDT)\n\n"
+            f"中介佣金应下发：{comm_rmb} ({currency}) | {comm_usdt} (USDT)\n"
+        )
+        bot.reply_to(msg, res)
 
-········# —— 7 筛“今日入笔” —— #
-········tz         = pytz.timezone('Asia/Kuala_Lumpur')
-········today_date = datetime.now(tz).date()
-
-········cursor.execute("""
-········  SELECT id, date, amount, fee_rate, rate, name
-········  FROM transactions
-········  WHERE chat_id=%s AND user_id=%s
-········  ORDER BY date
-········""", (chat_id, user_id))
-········all_rows    = cursor.fetchall()
-
-········daily_lines = []
-········for r0 in all_rows:
-············rd = r0['date']
-············if rd is None:
-················continue
-············if rd.tzinfo is None:
-················rd = rd.replace(tzinfo=pytz.utc)
-············local_dt = rd.astimezone(tz)
-············if local_dt.date() != today_date:
-················continue
-············ts   = local_dt.strftime('%H:%M:%S')
-············amt  = r0['amount']
-············usdt = round((amt * (1 - r0['fee_rate']/100)) / r0['rate'], 2)
-············sign = '+' if amt > 0 else '-'
-············daily_lines.append(
-················f"{r0['id']:03d}. {ts} {sign}{abs(amt)} * {1 - r0['fee_rate']/100} / {r0['rate']} = {usdt}  {r0['name']}"
-············)
-········daily_cnt = len(daily_lines)
-
-
-········# —— 8 拼“今日入笔” & “今日下发” & 汇总输出 —— #
-········res  = f"✅ 已入款 +{amount} ({currency})\n\n编号：{tid}\n\n"
-········res += f"{tid}. {t} {amount} * {1-fee_rate/100} / {rate} = {usdt_val}  {msg.from_user.username}\n"
-········if comm_rate > 0:
-············res += f"{tid}. {t} {amount} * {comm_rate/100} = {comm_rmb} 【佣金】\n\n"
-
-········res += f"今日入笔（{daily_cnt}笔）\n"
-········if daily_cnt:
-············res += "\n" + "\n".join(daily_lines) + "\n"
-········res += "\n今日下发（0笔）\n\n"
-
-········res += (
-············f"已入款（{cnt}笔）：{total_amt} ({currency})\n"
-············f"汇率：{rate}\n"
-············f"费率：{fee_rate}%\n"
-············f"佣金：{comm_rmb} ({currency}) | {comm_usdt} USDT\n\n"
-············f"应下发：{total_pending} ({currency}) | {tp_usdt} (USDT)\n"
-············f"已下发：{total_issued} ({currency}) | {ti_usdt} (USDT)\n"
-············f"未下发：{total_unissued} ({currency}) | {tu_usdt} (USDT)\n\n"
-············f"中介佣金应下发：{comm_rmb} ({currency}) | {comm_usdt} (USDT)\n"
-········)
-········bot.reply_to(msg, res)
+    except Exception as e:
+        conn.rollback()
+        bot.reply_to(msg, f"❌ 存储失败：{e}")
 
 # —— 启动 —— #
 if __name__ == '__main__':
